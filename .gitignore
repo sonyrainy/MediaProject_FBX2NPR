@@ -26,9 +26,8 @@ Assets/FBX2NPR/Models/
 Assets/FBX2NPR/Models.meta
 Assets/FBX2NPR/Sample/
 Assets/FBX2NPR/Sample.meta
-Assets/NormalTest/*
-!Assets/NormalTest/ToonBand.shader
-!Assets/NormalTest/ToonBand.shader.meta
+Assets/NormalTest/
+Assets/NormalTest.meta
 Assets/TutorialInfo/
 Assets/TutorialInfo.meta
 Assets/Readme.asset

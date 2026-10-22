@@ -20,7 +20,7 @@ namespace FBX2NPR.EditorTools
         // 0.34 가 아니라 0.29: 그래야 The Boss 가 사용자가 고른 붓 반경 9(1024 텍스처)가 된다.
         public const float BrushIpdFrac = 0.29f;
         /// <summary>회화풍 재질 셰이더 (URP Lit + 외곽선용 노멀 패스의 '멀어지면 안쪽 선 지우기', 기록 98번). 재질이 참조하므로 빌드에 들어간다.</summary>
-        public const string PainterlyLitPath = "Assets/FBX2NPR/PainterlyLit.shader";
+        public const string PainterlyLitPath = FBX2NPRConverter.ShaderDir + "/PainterlyLit.shader";
 
         public static FBX2NPRConverter.Report Convert(string modelPath, GameObject prefab, FBX2NPRAssetSettings crit, FBX2NPRConverter.Report rep)
         {
@@ -277,7 +277,7 @@ namespace FBX2NPR.EditorTools
                 var rigGo = new GameObject("회화풍 리그"); rigGo.transform.SetParent(inst.transform, false);
                 var rig = rigGo.AddComponent<PainterlyRig>();
                 rig.sourceModelGuid = modelGuid; rig.inkLine = crit.painterlyInk;
-                rig.eyeInk = crit.painterlyEyeInk; rig.inkEntries = inkEntries; rig.inkBlendShader = AssetDatabase.LoadAssetAtPath<Shader>("Assets/FBX2NPR/InkBlend.shader");
+                rig.eyeInk = crit.painterlyEyeInk; rig.inkEntries = inkEntries; rig.inkBlendShader = AssetDatabase.LoadAssetAtPath<Shader>(FBX2NPRConverter.ShaderDir + "/InkBlend.shader");
                 if (rig.inkBlendShader == null) rep.lines.Add("InkBlend.shader 없음: 눈매 잉크 슬라이더가 동작하지 않습니다."); else rep.lines.Add("눈매 잉크: 런타임 섞기 " + inkEntries.Count + "개 재질 (슬라이더 초기값 " + crit.painterlyEyeInk.ToString("F2", CultureInfo.InvariantCulture) + ")");
                 rig.generatedAssets = new List<string>();
                 foreach (var ap in used) { string g = AssetDatabase.AssetPathToGUID(ap); if (!string.IsNullOrEmpty(g)) rig.generatedAssets.Add(g); }

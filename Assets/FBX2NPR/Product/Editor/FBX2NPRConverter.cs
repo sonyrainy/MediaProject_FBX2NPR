@@ -34,7 +34,9 @@ namespace FBX2NPR.EditorTools
     {
         public const string OutRoot = "Assets/FBX2NPRConverted";
         const string RendererPath = "Assets/Settings/PC_Renderer.asset";
-        const string OutlineShaderPath = "Assets/FBX2NPR/SobelOutline.shader";
+        /// <summary>제품 셰이더 폴더. 재질·렌더러 피처가 셰이더를 경로로 불러오는 곳은 모두 여기를 쓴다.</summary>
+        public const string ShaderDir = "Assets/FBX2NPR/Product/Shaders";
+        const string OutlineShaderPath = ShaderDir + "/SobelOutline.shader";
         // 미리보기 생성기와 같은 코 도형 기본값 (62번: 두꺼운 초승달)
         const float MoonStretchDefault = 1.6f, MoonBulgeDefault = -0.35f, MoonThicknessDefault = 0.75f, MoonWidthDefault = 1.5f;
         const float DropRadiusDefault = 0.13f, DropHeightDefault = 0.37f;

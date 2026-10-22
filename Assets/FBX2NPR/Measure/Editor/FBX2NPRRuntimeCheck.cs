@@ -20,7 +20,7 @@ namespace FBX2NPR.EditorTools
         const string SceneDir = "Assets/FBX2NPRRuntimeCheck";
         public const string ScenePath = SceneDir + "/RuntimeCheck.unity";
         const string GroundMatPath = SceneDir + "/Ground.mat";
-        const string OutlineShaderPath = "Assets/FBX2NPR/SobelOutline.shader";
+        const string OutlineShaderPath = FBX2NPRConverter.ShaderDir + "/SobelOutline.shader";
         const float AmbientLinear = 0.30f;
         static string ProjectRoot { get { return Directory.GetParent(Application.dataPath).FullName; } }
         public static string OutRoot { get { return Path.Combine(ProjectRoot, "NormalTestOut", "runtime"); } }
