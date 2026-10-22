@@ -52,7 +52,6 @@ namespace FBX2NPR.EditorTools
         const string RendererPath = "Assets/Settings/PC_Renderer.asset";
         const int Res = 700;
         const float FovY = 24f;
-        const float WeightThreshold = 0.5f;
 
         static readonly StringBuilder Log = new StringBuilder();
         static void L(string m) { Log.AppendLine(m); Console.WriteLine("[gen] " + m); }
@@ -229,32 +228,10 @@ namespace FBX2NPR.EditorTools
                         if ((uv0[i] - uv3[i]).sqrMagnitude > 1e-10f) { uv3Dup = false; break; }
                 }
 
-                // 머리 본 가중치 — 포스트프로세서와 동일 규칙
-                var heads = new HashSet<int>();
-                for (int i = 0; i < smr.bones.Length; i++)
-                    if (smr.bones[i] != null && smr.bones[i].name.ToLowerInvariant().Contains("head")) heads.Add(i);
-                p.weights = new float[p.mesh.vertexCount];
-                var bw = src.boneWeights;
-                if (bw != null && bw.Length == p.mesh.vertexCount && heads.Count > 0)
-                {
-                    for (int i = 0; i < bw.Length; i++)
-                    {
-                        float w = 0f;
-                        if (heads.Contains(bw[i].boneIndex0)) w += bw[i].weight0;
-                        if (heads.Contains(bw[i].boneIndex1)) w += bw[i].weight1;
-                        if (heads.Contains(bw[i].boneIndex2)) w += bw[i].weight2;
-                        if (heads.Contains(bw[i].boneIndex3)) w += bw[i].weight3;
-                        if (w >= WeightThreshold)
-                        {
-                            p.weights[i] = Mathf.SmoothStep(0f, 1f, Mathf.InverseLerp(WeightThreshold, 1f, w));
-                            p.headCount++;
-                        }
-                    }
-                }
-                // 프레이밍은 머리 본 가중치 전체로, 변환은 얼굴 메시만.
-                p.boundsW = p.weights;
-                p.isFace = crit.IsFaceMesh(src.name, smr.sharedMaterials);
-                if (!p.isFace) { headBoneOnly += p.headCount; p.weights = new float[p.mesh.vertexCount]; p.headCount = 0; }
+                // 머리 본 가중치·얼굴 판정 — 변환기·임포터·미리보기와 같은 규칙 (FaceMeshRule). 프레이밍은 머리 본 가중치 전체로, 변환은 얼굴 메시만.
+                var fw = FaceMeshRule.Weigh(src, smr.bones, smr.sharedMaterials, crit);
+                p.weights = fw.face; p.boundsW = fw.head; p.headCount = fw.faceCount; p.isFace = fw.isFace;
+                if (!p.isFace) headBoneOnly += fw.headCount;
                 totalV += p.mesh.vertexCount; totalHead += p.headCount;
                 parts.Add(p);
             }
@@ -272,14 +249,10 @@ namespace FBX2NPR.EditorTools
                 p.origN = p.mesh.normals;
                 p.l2w = mf.transform.localToWorldMatrix;
                 p.albedo = ResolveAlbedo(mfMats != null && mfMats.Length > 0 ? mfMats[0] : null, path, crit);
-                bool underHead = false;
-                for (var t = mf.transform; t != null && t != inst.transform; t = t.parent)
-                    if (t.name.ToLowerInvariant().Contains(crit.headBoneContains.ToLowerInvariant())) { underHead = true; break; }
-                p.weights = new float[p.mesh.vertexCount];
-                if (underHead) { for (int i = 0; i < p.weights.Length; i++) p.weights[i] = 1f; p.headCount = p.weights.Length; }
-                p.boundsW = p.weights;
-                p.isFace = crit.IsFaceMesh(src.name, mfMats);
-                if (!p.isFace) { headBoneOnly += p.headCount; p.weights = new float[p.mesh.vertexCount]; p.headCount = 0; }
+                bool underHead = FaceMeshRule.IsUnderHead(mf.transform, inst.transform, crit.headBoneContains);
+                var fw = FaceMeshRule.WeighStatic(src, mf.transform, inst.transform, mfMats, crit);
+                p.weights = fw.face; p.boundsW = fw.head; p.headCount = fw.faceCount; p.isFace = fw.isFace;
+                if (!p.isFace) headBoneOnly += fw.headCount;
                 totalV += p.mesh.vertexCount; totalHead += p.headCount;
                 L(string.Format("    정적 메시 {0,-14} v={1,5} 머리아래={2} 얼굴={3} 재질={4} 알베도={5}", src.name, src.vertexCount, underHead ? "예" : "아니오", p.isFace ? "예" : "아니오",
                     mfMats == null ? "-" : string.Join("|", Array.ConvertAll(mfMats, m => m == null ? "null" : m.name)), p.albedo == null ? "없음" : p.albedo.name));
@@ -325,15 +298,8 @@ namespace FBX2NPR.EditorTools
             // 얼굴 기준점(코끝·눈): curve 모드의 코 음영(46번)·눈 피하기(47번) 기준. 규칙은 FaceLandmarks 한곳에 있다 (미리보기 씬과 공용).
             Marks = null;
             {
-                // 방사형 노멀 중심: ApplyMix 와 같은 규칙(얼굴 파트 가중치 정점의 중복 제거 평균). 기준점 명암선이 이 중심에서 본 방향으로 임계값을 잰다.
-                var cw = new List<Vector3>();
-                foreach (var p in parts)
-                {
-                    if (p.headCount == 0) continue;
-                    var v = p.mesh.vertices;
-                    for (int i = 0; i < p.weights.Length; i++) if (p.weights[i] > 0f) cw.Add(p.l2w.MultiplyPoint3x4(v[i]));
-                }
-                RadialCenterW = RadialNormals.Centroid(cw.ToArray());
+                // 방사형 노멀 중심: ApplyMix 와 같은 규칙(얼굴 파트 가중치 정점의 중복 제거 평균, FaceMeshRule). 기준점 명암선이 이 중심에서 본 방향으로 임계값을 잰다.
+                RadialCenterW = FaceMeshRule.Centroid(Targets(parts));
             }
             if (CurveFace)
             {
@@ -611,22 +577,22 @@ namespace FBX2NPR.EditorTools
         static void ApplyMix(List<Part> parts, float mix)
         {
             // 중심은 얼굴 파트 전체(월드)에서 한 번만 구한다. 파트별로 구하면 여러 메시로 갈라진 얼굴(유니티짱)에서
-            // 메시 경계마다 방사 방향이 달라져 이음새가 생긴다. 포스트프로세서와 같은 규칙.
-            var world = new List<Vector3>();
-            foreach (var p in parts)
+            // 메시 경계마다 방사 방향이 달라져 이음새가 생긴다. 변환기·임포터와 같은 규칙 (FaceMeshRule).
+            var targets = Targets(parts);
+            Vector3 centerW = FaceMeshRule.Centroid(targets);
+            for (int k = 0; k < parts.Count; k++)
             {
-                if (p.headCount == 0) continue;
-                var v = p.mesh.vertices;
-                for (int i = 0; i < p.weights.Length; i++) if (p.weights[i] > 0f) world.Add(p.l2w.MultiplyPoint3x4(v[i]));
-            }
-            Vector3 centerW = RadialNormals.Centroid(world.ToArray());
-            foreach (var p in parts)
-            {
+                var p = parts[k];
                 if (p.headCount == 0) { p.mesh.normals = p.origN; continue; }
-                var v = p.mesh.vertices;
-                Vector3 center = p.l2w.inverse.MultiplyPoint3x4(centerW);
-                p.mesh.normals = RadialNormals.Apply(v, p.origN, center, mix, p.weights);
+                p.mesh.normals = FaceMeshRule.Apply(targets[k], centerW, mix);
             }
+        }
+
+        static List<FaceMeshRule.Target> Targets(List<Part> parts)
+        {
+            var list = new List<FaceMeshRule.Target>();
+            foreach (var p in parts) list.Add(new FaceMeshRule.Target { vertices = p.mesh.vertices, origN = p.origN, l2w = p.l2w, weights = p.weights, count = p.headCount });
+            return list;
         }
 
         /// <summary>

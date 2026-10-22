@@ -18,14 +18,13 @@ namespace FBX2NPR.EditorTools
     /// 씬을 열고 '얼굴 명암 리그'를 선택하면 명암선 위치·부드러움·코 음영·눈 피하기·림을 슬라이더로 바꾸고,
     /// 표식을 이동·회전해 빛 방향과 코·눈 영역을 바꿀 수 있다. 코끝·눈 표식의 처음 자리는 FaceLandmarks 가 자동으로 찾는다.
     ///
-    /// 메시 처리 규칙은 GeneralizationTest 와 같다(머리 본 가중치, 모델별 얼굴 판정 규칙, 머리 아래 정적 메시, 데칼 무시,
-    /// 얼굴 전체에서 한 번 구한 중심으로 방사형 노멀, 원본 노멀은 UV3). 도구 패키지화(계획 2단계) 때 한곳으로 합칠 것.
+    /// 메시 처리 규칙(머리 본 가중치, 모델별 얼굴 판정, 머리 아래 정적 메시, 얼굴 전체에서 한 번 구한 중심으로 방사형 노멀)은
+    /// FaceMeshRule 한곳에 있다 — 변환기·임포터·실험과 공용. 데칼 무시, 원본 노멀은 UV3.
     /// </summary>
     public static class ToonFacePreview
     {
         const string OutRoot = "Assets/FBX2NPRPreview";
         const string RendererPath = "Assets/Settings/PC_Renderer.asset";
-        const float WeightThreshold = 0.5f;
         const float FovY = 24f;
         const int Res = 700;
         // 손으로 칠한 알베도는 얼굴도 실루엣 외곽선만 쓴다 (규칙 9). 알베도 지표로 자동 판정하는 것은 남은 일.
@@ -113,18 +112,13 @@ namespace FBX2NPR.EditorTools
 
             // 원본 노멀은 UV3 (외곽선 검출과 코 음영이 쓴다), 조명용 노멀은 방사형 (얼굴 전체에서 한 번 구한 중심).
             foreach (var p in parts) p.mesh.SetUVs(3, new List<Vector3>(p.origN));
-            var world = new List<Vector3>();
-            foreach (var p in parts)
+            var targets = new List<FaceMeshRule.Target>();
+            foreach (var p in parts) targets.Add(new FaceMeshRule.Target { vertices = p.mesh.vertices, origN = p.origN, l2w = p.l2w, weights = p.weights, count = p.headCount });
+            Vector3 centerW = FaceMeshRule.Centroid(targets);
+            for (int k = 0; k < parts.Count; k++)
             {
-                if (p.headCount == 0) continue;
-                var v = p.mesh.vertices;
-                for (int i = 0; i < v.Length; i++) if (p.weights[i] > 0f) world.Add(p.l2w.MultiplyPoint3x4(v[i]));
-            }
-            Vector3 centerW = RadialNormals.Centroid(world.ToArray());
-            foreach (var p in parts)
-            {
-                if (p.headCount == 0) continue;
-                p.mesh.normals = RadialNormals.Apply(p.mesh.vertices, p.origN, p.l2w.inverse.MultiplyPoint3x4(centerW), 1f, p.weights);
+                if (parts[k].headCount == 0) continue;
+                parts[k].mesh.normals = FaceMeshRule.Apply(targets[k], centerW, 1f);
             }
 
             // 기준점과 프레이밍
@@ -284,26 +278,8 @@ namespace FBX2NPR.EditorTools
                 p.origN = p.mesh.normals;
                 p.l2w = smr.transform.localToWorldMatrix;
                 p.albedo = ResolveAlbedo(smr.sharedMaterial, path, crit);
-                var heads = new HashSet<int>();
-                for (int i = 0; i < smr.bones.Length; i++)
-                    if (smr.bones[i] != null && smr.bones[i].name.ToLowerInvariant().Contains("head")) heads.Add(i);
-                p.weights = new float[p.mesh.vertexCount];
-                var bw = src.boneWeights;
-                if (bw != null && bw.Length == p.mesh.vertexCount && heads.Count > 0)
-                {
-                    for (int i = 0; i < bw.Length; i++)
-                    {
-                        float w = 0f;
-                        if (heads.Contains(bw[i].boneIndex0)) w += bw[i].weight0;
-                        if (heads.Contains(bw[i].boneIndex1)) w += bw[i].weight1;
-                        if (heads.Contains(bw[i].boneIndex2)) w += bw[i].weight2;
-                        if (heads.Contains(bw[i].boneIndex3)) w += bw[i].weight3;
-                        if (w >= WeightThreshold) { p.weights[i] = Mathf.SmoothStep(0f, 1f, Mathf.InverseLerp(WeightThreshold, 1f, w)); p.headCount++; }
-                    }
-                }
-                p.boundsW = (float[])p.weights.Clone();
-                p.isFace = crit.IsFaceMesh(src.name, smr.sharedMaterials);
-                if (!p.isFace) { p.weights = new float[p.mesh.vertexCount]; p.headCount = 0; }
+                var fw = FaceMeshRule.Weigh(src, smr.bones, smr.sharedMaterials, crit);
+                p.weights = fw.face; p.boundsW = fw.head; p.headCount = fw.faceCount; p.isFace = fw.isFace;
                 parts.Add(p);
             }
             foreach (var mf in inst.GetComponentsInChildren<MeshFilter>(true))
@@ -318,14 +294,8 @@ namespace FBX2NPR.EditorTools
                 p.origN = p.mesh.normals;
                 p.l2w = mf.transform.localToWorldMatrix;
                 p.albedo = ResolveAlbedo(mats != null && mats.Length > 0 ? mats[0] : null, path, crit);
-                bool underHead = false;
-                for (var t = mf.transform; t != null && t != inst.transform; t = t.parent)
-                    if (t.name.ToLowerInvariant().Contains(crit.headBoneContains.ToLowerInvariant())) { underHead = true; break; }
-                p.weights = new float[p.mesh.vertexCount];
-                if (underHead) { for (int i = 0; i < p.weights.Length; i++) p.weights[i] = 1f; p.headCount = p.weights.Length; }
-                p.boundsW = (float[])p.weights.Clone();
-                p.isFace = crit.IsFaceMesh(src.name, mats);
-                if (!p.isFace) { p.weights = new float[p.mesh.vertexCount]; p.headCount = 0; }
+                var fw = FaceMeshRule.WeighStatic(src, mf.transform, inst.transform, mats, crit);
+                p.weights = fw.face; p.boundsW = fw.head; p.headCount = fw.faceCount; p.isFace = fw.isFace;
                 parts.Add(p);
             }
             return parts;

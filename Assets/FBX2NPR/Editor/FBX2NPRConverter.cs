@@ -28,14 +28,13 @@ namespace FBX2NPR.EditorTools
     /// 다만 리그의 슬라이더 값은 변환 도구의 기본값으로 돌아간다 (씬 인스턴스에서 바꾼 값은 인스턴스 오버라이드로 남는다).
     ///
     /// 전제: 모델이 +Z 를 보고 +Y 가 위다. 블렌드셰이프(표정)가 있는 메시는 시험하지 않았다 (경고만 낸다).
-    /// 메시 처리 규칙은 GeneralizationTest·ToonFacePreview 와 같다. 세 곳에 같은 규칙이 있으므로 고칠 때 같이 볼 것.
+    /// 메시 처리 규칙(머리 본 가중치·얼굴 판정·방사형 중심)은 FaceMeshRule 한곳에 있다. 임포터(FBX2NPRPostprocessor)·실험(GeneralizationTest)·미리보기(ToonFacePreview)도 같은 것을 쓴다.
     /// </summary>
     public static class FBX2NPRConverter
     {
         public const string OutRoot = "Assets/FBX2NPRConverted";
         const string RendererPath = "Assets/Settings/PC_Renderer.asset";
         const string OutlineShaderPath = "Assets/FBX2NPR/SobelOutline.shader";
-        const float WeightThreshold = 0.5f;
         // 미리보기 생성기와 같은 코 도형 기본값 (62번: 두꺼운 초승달)
         const float MoonStretchDefault = 1.6f, MoonBulgeDefault = -0.35f, MoonThicknessDefault = 0.75f, MoonWidthDefault = 1.5f;
         const float DropRadiusDefault = 0.13f, DropHeightDefault = 0.37f;
@@ -85,6 +84,14 @@ namespace FBX2NPR.EditorTools
             // 얼굴 재질을 받을 렌더러인가. 재질명 규칙(isFace)만으로는 부족하다 — 믹사모 Ch07 은 옷도 피부와 같은 재질(Ch07_body)을 써서
             // 옷까지 얼굴로 잡힌다. 실제로 얼굴 정점(머리 본 가중치)이 있는 메시만 얼굴 재질을 받는다.
             public bool FaceRend { get { return isFace && headCount > 0; } }
+
+            // 머리 본 가중치·얼굴 판정(FaceMeshRule). boundsW 는 얼굴 여부와 무관한 머리 가중치(카메라 프레이밍용), 안쪽 선 지우기 범위는 얼굴 메시 전체.
+            public void Weigh(FaceMeshRule.Weights w)
+            {
+                weights = w.face; boundsW = w.head; headCount = w.faceCount; isFace = w.isFace; skinRule = w.isFace;
+                lineFadeW = w.isFace ? LineFadeWeights(mesh.vertexCount) : new float[mesh.vertexCount];
+            }
+            public FaceMeshRule.Target Target() { return new FaceMeshRule.Target { vertices = mesh.vertices, origN = origN, l2w = l2w, weights = weights, count = headCount }; }
         }
 
         [MenuItem("FBX2NPR/툰 캐릭터로 변환 (선택한 모델)")]
@@ -177,19 +184,15 @@ namespace FBX2NPR.EditorTools
                         rep.lines.Add("주의: 블렌드셰이프(표정)가 있는 메시가 있습니다 (" + p.name + " 등). 표정을 움직일 때의 노멀은 시험하지 않았습니다: 탄젠트 자리의 원본 노멀에 탄젠트용 변화량이 더해져 코 음영·얼굴 안쪽 선이 틀어질 수 있습니다.");
                     }
                 }
-                var world = new List<Vector3>();
-                foreach (var p in parts)
-                {
-                    if (p.headCount == 0) continue;
-                    var v = p.mesh.vertices;
-                    for (int i = 0; i < v.Length; i++) if (p.weights[i] > 0f) world.Add(p.l2w.MultiplyPoint3x4(v[i]));
-                }
-                Vector3 centerW = world.Count > 0 ? RadialNormals.Centroid(world.ToArray()) : Vector3.zero;
+                var targets = new List<FaceMeshRule.Target>();
+                foreach (var p in parts) targets.Add(p.Target());
+                Vector3 centerW = FaceMeshRule.Centroid(targets);
                 int cleaned = 0;
-                foreach (var p in parts)
+                for (int k = 0; k < parts.Count; k++)
                 {
+                    var p = parts[k];
                     if (p.headCount == 0) continue;
-                    p.mesh.normals = RadialNormals.Apply(p.mesh.vertices, p.origN, p.l2w.inverse.MultiplyPoint3x4(centerW), 1f, p.weights);
+                    p.mesh.normals = FaceMeshRule.Apply(targets[k], centerW, 1f);
                     cleaned += p.headCount;
                 }
 
@@ -602,7 +605,6 @@ namespace FBX2NPR.EditorTools
         static List<Part> CollectParts(GameObject inst, FBX2NPRAssetSettings crit, string path, Report rep, Transform headBone)
         {
             var parts = new List<Part>();
-            string headKey = (crit.headBoneContains ?? "").ToLowerInvariant();
             float maxBindDiff = 0f; string maxBindName = null;
             var boneSet = new HashSet<Transform>();
             foreach (var s0 in inst.GetComponentsInChildren<SkinnedMeshRenderer>(true))
@@ -620,32 +622,11 @@ namespace FBX2NPR.EditorTools
                 p.origN = p.mesh.normals;
                 if (p.origN == null || p.origN.Length != p.mesh.vertexCount) { p.mesh.RecalculateNormals(); p.origN = p.mesh.normals; rep.lines.Add("노멀이 없는 메시: 노멀을 새로 계산해 변환 — " + src.name); }
                 p.albedo = ResolveAlbedo(smr.sharedMaterial, path, crit);
-                var heads = new HashSet<int>();
-                if (headKey.Length > 0)
-                    for (int i = 0; i < smr.bones.Length; i++)
-                        if (smr.bones[i] != null && smr.bones[i].name.ToLowerInvariant().Contains(headKey)) heads.Add(i);
                 // 메시 좌표 → 월드. 스킨 메시가 실제로 그려지는 자리는 '본 x 바인드 포즈'가 정하고 메시 오브젝트의 트랜스폼은 쓰이지 않는다.
                 // 둘이 다른 모델(임포트된 자세가 바인드 포즈와 조금 다르거나, 메시 노드에 스케일이 걸린 FBX)에서는 머리 본 기준 행렬을 쓴다.
                 float diff; p.l2w = BindToWorld(smr, src, headBone, out diff); p.bindDiff = diff;
                 if (diff > maxBindDiff) { maxBindDiff = diff; maxBindName = src.name; }
-                p.weights = new float[p.mesh.vertexCount];
-                var bw = src.boneWeights;
-                if (bw != null && bw.Length == p.mesh.vertexCount && heads.Count > 0)
-                {
-                    for (int i = 0; i < bw.Length; i++)
-                    {
-                        float w = 0f;
-                        if (heads.Contains(bw[i].boneIndex0)) w += bw[i].weight0;
-                        if (heads.Contains(bw[i].boneIndex1)) w += bw[i].weight1;
-                        if (heads.Contains(bw[i].boneIndex2)) w += bw[i].weight2;
-                        if (heads.Contains(bw[i].boneIndex3)) w += bw[i].weight3;
-                        if (w >= WeightThreshold) { p.weights[i] = Mathf.SmoothStep(0f, 1f, Mathf.InverseLerp(WeightThreshold, 1f, w)); p.headCount++; }
-                    }
-                }
-                p.boundsW = (float[])p.weights.Clone();
-                p.lineFadeW = LineFadeWeights(p.mesh.vertexCount);
-                p.isFace = crit.IsFaceMesh(src.name, smr.sharedMaterials); p.skinRule = p.isFace;
-                if (!p.isFace) { p.weights = new float[p.mesh.vertexCount]; p.headCount = 0; p.lineFadeW = new float[p.mesh.vertexCount]; }
+                p.Weigh(FaceMeshRule.Weigh(src, smr.bones, smr.sharedMaterials, crit));
                 SetupSlots(p, crit, path, rep);
                 parts.Add(p);
             }
@@ -668,16 +649,7 @@ namespace FBX2NPR.EditorTools
                 if (p.origN == null || p.origN.Length != p.mesh.vertexCount) { p.mesh.RecalculateNormals(); p.origN = p.mesh.normals; rep.lines.Add("노멀이 없는 메시: 노멀을 새로 계산해 변환 — " + src.name); }
                 p.l2w = mf.transform.localToWorldMatrix;
                 p.albedo = ResolveAlbedo(p.srcMats.Length > 0 ? p.srcMats[0] : null, path, crit);
-                bool underHead = false;
-                if (headKey.Length > 0)
-                    for (var t = mf.transform; t != null && t != inst.transform; t = t.parent)
-                        if (t.name.ToLowerInvariant().Contains(headKey)) { underHead = true; break; }
-                p.weights = new float[p.mesh.vertexCount];
-                if (underHead) { for (int i = 0; i < p.weights.Length; i++) p.weights[i] = 1f; p.headCount = p.weights.Length; }
-                p.boundsW = (float[])p.weights.Clone();
-                p.lineFadeW = LineFadeWeights(p.mesh.vertexCount);
-                p.isFace = crit.IsFaceMesh(src.name, p.srcMats); p.skinRule = p.isFace;
-                if (!p.isFace) { p.weights = new float[p.mesh.vertexCount]; p.headCount = 0; p.lineFadeW = new float[p.mesh.vertexCount]; }
+                p.Weigh(FaceMeshRule.WeighStatic(src, mf.transform, inst.transform, p.srcMats, crit));
                 SetupSlots(p, crit, path, rep);
                 parts.Add(p);
             }

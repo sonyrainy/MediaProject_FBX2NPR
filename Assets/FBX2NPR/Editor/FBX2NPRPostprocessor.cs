@@ -58,13 +58,9 @@ namespace FBX2NPR.EditorTools
                 if (mf.sharedMesh == null) continue;
                 var mr = mf.GetComponent<MeshRenderer>();
                 if (!s.IsFaceMesh(mf.sharedMesh.name, mr != null ? mr.sharedMaterials : null)) { skipped.Add(mf.sharedMesh.name + "(정적·비얼굴)"); continue; }
-                bool underHead = false;
-                for (var t = mf.transform; t != null && t != root.transform; t = t.parent)
-                    if (t.name.ToLowerInvariant().Contains(s.headBoneContains.ToLowerInvariant())) { underHead = true; break; }
-                if (!underHead) { skipped.Add(mf.sharedMesh.name + "(정적·머리 밖)"); continue; }
-                var j = new Job { mesh = mf.sharedMesh, weights = new float[mf.sharedMesh.vertexCount], subset = new List<int>(), l2w = mf.transform.localToWorldMatrix };
-                for (int i = 0; i < j.weights.Length; i++) { j.weights[i] = 1f; j.subset.Add(i); }
-                jobs.Add(j);
+                if (!FaceMeshRule.IsUnderHead(mf.transform, root.transform, s.headBoneContains)) { skipped.Add(mf.sharedMesh.name + "(정적·머리 밖)"); continue; }
+                int n; var w = FaceMeshRule.StaticHeadWeights(mf.sharedMesh.vertexCount, true, out n);
+                jobs.Add(new Job { mesh = mf.sharedMesh, weights = w, count = n, l2w = mf.transform.localToWorldMatrix });
             }
             if (jobs.Count == 0)
             {
@@ -72,17 +68,16 @@ namespace FBX2NPR.EditorTools
                 return;
             }
 
-            // 중심은 얼굴 파트 전체를 월드로 모아 한 번만 구합니다. 파트마다 따로 구하면
+            // 중심은 얼굴 파트 전체를 월드로 모아 한 번만 구합니다 (FaceMeshRule — 변환기·실험·미리보기와 같은 규칙). 파트마다 따로 구하면
             // 여러 메시로 갈라진 얼굴(유니티짱)에서 메시 경계마다 방사 방향이 달라져 이음새가 생깁니다.
-            var world = new List<Vector3>();
-            foreach (var j in jobs) { var v = j.mesh.vertices; foreach (var i in j.subset) world.Add(j.l2w.MultiplyPoint3x4(v[i])); }
-            Vector3 centerW = RadialNormals.Centroid(world.ToArray());
-            foreach (var j in jobs)
+            var targets = new List<FaceMeshRule.Target>();
+            foreach (var j in jobs) targets.Add(new FaceMeshRule.Target { vertices = j.mesh.vertices, origN = j.mesh.normals, l2w = j.l2w, weights = j.weights, count = j.count });
+            Vector3 centerW = FaceMeshRule.Centroid(targets);
+            for (int k = 0; k < jobs.Count; k++)
             {
-                var normals = j.mesh.normals; var verts = j.mesh.vertices;
-                if (normals == null || normals.Length != verts.Length) { skipped.Add(j.mesh.name + "(노멀 없음)"); continue; }
-                Vector3 centerL = j.l2w.inverse.MultiplyPoint3x4(centerW);
-                j.mesh.normals = RadialNormals.Apply(verts, normals, centerL, s.mix, j.weights);
+                var j = jobs[k]; var t = targets[k];
+                if (t.origN == null || t.origN.Length != t.vertices.Length) { skipped.Add(j.mesh.name + "(노멀 없음)"); continue; }
+                j.mesh.normals = FaceMeshRule.Apply(t, centerW, s.mix);
                 j.mesh.RecalculateTangents();
                 applied.Add(j.mesh.name);
             }
@@ -94,36 +89,14 @@ namespace FBX2NPR.EditorTools
                 skipped.Count > 0 ? string.Join(", ", skipped.ToArray()) : "없음"));
         }
 
-        class Job { public Mesh mesh; public float[] weights; public List<int> subset; public Matrix4x4 l2w; }
+        class Job { public Mesh mesh; public float[] weights; public int count; public Matrix4x4 l2w; }
 
-        /// <summary>대상 본에 실린 가중치를 정점별로 뽑습니다. 대상 정점이 없으면 null.</summary>
+        /// <summary>대상 본에 실린 가중치를 정점별로 뽑습니다 (FaceMeshRule, 임계값과 부드러운 경계는 모델 설정값). 대상 정점이 없으면 null.</summary>
         static Job Weigh(Mesh mesh, Transform[] bones, FBX2NPRAssetSettings s)
         {
-            if (mesh == null || bones == null || bones.Length == 0) return null;
-            var targets = new HashSet<int>();
-            for (int i = 0; i < bones.Length; i++)
-            {
-                if (bones[i] == null) continue;
-                if (bones[i].name.ToLowerInvariant().Contains(s.headBoneContains.ToLowerInvariant())) targets.Add(i);
-            }
-            if (targets.Count == 0) return null;
-            var bw = mesh.boneWeights;
-            if (bw == null || bw.Length != mesh.vertexCount) return null;
-
-            var j = new Job { mesh = mesh, weights = new float[mesh.vertexCount], subset = new List<int>() };
-            for (int i = 0; i < bw.Length; i++)
-            {
-                float w = 0f;
-                if (targets.Contains(bw[i].boneIndex0)) w += bw[i].weight0;
-                if (targets.Contains(bw[i].boneIndex1)) w += bw[i].weight1;
-                if (targets.Contains(bw[i].boneIndex2)) w += bw[i].weight2;
-                if (targets.Contains(bw[i].boneIndex3)) w += bw[i].weight3;
-                if (w < s.weightThreshold) { j.weights[i] = 0f; continue; }
-                j.subset.Add(i);
-                // 임계값에서 딱 자르면 경계에 가로줄이 생깁니다. 임계값~1 구간을 부드럽게 올립니다.
-                j.weights[i] = s.smoothFalloff ? Mathf.SmoothStep(0f, 1f, Mathf.InverseLerp(s.weightThreshold, 1f, w)) : 1f;
-            }
-            return j.subset.Count > 0 ? j : null;
+            if (mesh == null) return null;
+            int n; var w = FaceMeshRule.SkinnedHeadWeights(mesh, bones, s.headBoneContains, s.weightThreshold, s.smoothFalloff, out n);
+            return n > 0 ? new Job { mesh = mesh, weights = w, count = n } : null;
         }
     }
 }
