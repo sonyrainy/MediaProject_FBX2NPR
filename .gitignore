@@ -1,0 +1,36 @@
+# Unity
+[Ll]ibrary/
+[Tt]emp/
+[Oo]bj/
+[Bb]uild/
+[Ll]ogs/
+[Uu]serSettings/
+*.csproj
+*.sln
+*.slnx
+.vs/
+
+# 작업 사본·실험 출력
+*.bak*
+Backups_ToonKit/
+NormalTestOut/
+
+# 재배포 불가 에셋: 믹사모 모델·텍스처, 유니티짱(UCL), face-parsing ONNX(비상업 연구용)
+Assets/TestSet/
+Assets/TestSet.meta
+Assets/FBX2NPRConverted/
+Assets/FBX2NPRConverted.meta
+Assets/FBX2NPRPreview/
+Assets/FBX2NPRPreview.meta
+Assets/FBX2NPR/Models/
+Assets/FBX2NPR/Models.meta
+Assets/FBX2NPR/Sample/
+Assets/FBX2NPR/Sample.meta
+Assets/NormalTest/*
+!Assets/NormalTest/ToonBand.shader
+!Assets/NormalTest/ToonBand.shader.meta
+Assets/TutorialInfo/
+Assets/TutorialInfo.meta
+Assets/Readme.asset
+Assets/Readme.asset.meta
+ARFaceDemo/*.png
