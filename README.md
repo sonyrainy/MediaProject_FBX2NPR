@@ -61,6 +61,24 @@ Unity 6 URP / C# / HLSL / Unity Inference Engine(ONNX). 시험 캐릭터 4명(�
 5. 회화풍 모드 — 쿠와하라 + LIC로 붓질한 텍스처에 표준 Lit 셰이딩과 얇은 잉크선을 입힙니다.
 6. 동작 보정/런타임 검증 — 믹사모 클립을 Humanoid로 설정하고, 빌드에서 떨림/속도를 측정했습니다.
 
+## 폴더 구조
+
+```
+Assets/FBX2NPR/
+├─ Product/           변환에 쓰이는 코드
+│  ├─ Runtime/        리그(ToonFaceRig/PainterlyRig), 노멀 정리, 외곽선 피처, 모델 설정
+│  ├─ Shaders/        툰/회화풍/외곽선 셰이더
+│  └─ Editor/         변환기, 임포터, 얼굴 파싱/피부 평탄화/이목구비 그리기, 회화풍 처리, 인스펙터
+├─ Measure/           실험/비교/진단, 빌드 검증
+│  ├─ Editor/
+│  └─ RuntimeCheck/
+├─ Capture/Editor/    포트폴리오용 캡처
+└─ Models/            얼굴 파싱 ONNX 자리 (저장소에는 없음)
+ARFaceDemo/           웹캠 데모 (브라우저)
+```
+
+Product 코드는 Measure/Capture 코드를 참조하지 않습니다.
+
 ## 결과
 
 |항목|값|조건|
