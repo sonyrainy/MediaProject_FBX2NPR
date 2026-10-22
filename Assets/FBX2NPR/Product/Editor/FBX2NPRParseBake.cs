@@ -520,7 +520,7 @@ namespace FBX2NPR.EditorTools
                     var imp = AssetImporter.GetAtPath(modelPath);
                     var crit = FBX2NPRAssetSettings.FromJson(imp != null ? imp.userData : null) ?? new FBX2NPRAssetSettings();
                     var pbr = (GameObject)PrefabUtility.InstantiatePrefab(AssetDatabase.LoadAssetAtPath<GameObject>(modelPath));
-                    foreach (var note in FBX2NPRCompare.FixOriginal(pbr, crit, modelPath, temps)) log.Add("  " + note);
+                    foreach (var note in OriginalMaterialFix.Apply(pbr, crit, modelPath, temps)) log.Add("  " + note);
                     var sw = System.Diagnostics.Stopwatch.StartNew();
                     var r = FBX2NPRParseBake.Bake(pbr, crit, modelPath, parser, 1024, null, OutDir, c);
                     sw.Stop();

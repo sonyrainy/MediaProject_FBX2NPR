@@ -199,7 +199,7 @@ namespace FBX2NPR.EditorTools
                 // ---- (1) 원본 PBR
                 var pbr = (GameObject)PrefabUtility.InstantiatePrefab(AssetDatabase.LoadAssetAtPath<GameObject>(mp));
                 pbr.name = "cell1_orig";
-                foreach (var n in FBX2NPRCompare.FixOriginal(pbr, crit, mp, temps)) L("(1) " + n);
+                foreach (var n in OriginalMaterialFix.Apply(pbr, crit, mp, temps)) L("(1) " + n);
                 Bounds head; int hv; if (!FBX2NPRParseBake.HeadBounds(pbr, crit, out head, out hv)) head = FBX2NPRRuntimeCheck.HeadOf(pbr, ModelName, new List<string>());
                 L("머리 바운드 (원본 FBX 기준, FinalSheet 와 같음): 중심 " + V3(head.center) + " 크기 " + V3(head.size) + " 정점 " + hv);
 

@@ -125,7 +125,7 @@ namespace FBX2NPR.EditorTools
                     var imp = AssetImporter.GetAtPath(modelPath);
                     var crit = FBX2NPRAssetSettings.FromJson(imp != null ? imp.userData : null) ?? new FBX2NPRAssetSettings();
                     var pbr = (GameObject)PrefabUtility.InstantiatePrefab(AssetDatabase.LoadAssetAtPath<GameObject>(modelPath));
-                    foreach (var note in FBX2NPRCompare.FixOriginal(pbr, crit, modelPath, temps)) L("  " + note);
+                    foreach (var note in OriginalMaterialFix.Apply(pbr, crit, modelPath, temps)) L("  " + note);
 
                     Bounds head; int headVerts;
                     if (!HeadBounds(pbr, crit, out head, out headVerts)) { L("  머리 본을 못 찾아 건너뜀 (headBoneContains='" + crit.headBoneContains + "')"); continue; }

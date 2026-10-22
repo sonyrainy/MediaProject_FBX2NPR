@@ -78,7 +78,7 @@ namespace FBX2NPR.EditorTools
             FBX2NPRRuntimeCheck.NewStage(false);
             var crit = FBX2NPRRuntimeCheck.Crit(c);
             var pbr = (GameObject)PrefabUtility.InstantiatePrefab(AssetDatabase.LoadAssetAtPath<GameObject>(mp));
-            foreach (var n in FBX2NPRCompare.FixOriginal(pbr, crit, mp, temps)) log.Add("  [" + c + "] " + n);
+            foreach (var n in OriginalMaterialFix.Apply(pbr, crit, mp, temps)) log.Add("  [" + c + "] " + n);
             var toonP = AssetDatabase.LoadAssetAtPath<GameObject>(FBX2NPRRuntimeCheck.PrefabPath(c + "_Toon"));
             var paintP = AssetDatabase.LoadAssetAtPath<GameObject>(FBX2NPRRuntimeCheck.PrefabPath(c + "_Painterly"));
             var toon = toonP != null ? (GameObject)PrefabUtility.InstantiatePrefab(toonP) : null;

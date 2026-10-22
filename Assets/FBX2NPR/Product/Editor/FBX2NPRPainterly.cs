@@ -95,7 +95,7 @@ namespace FBX2NPR.EditorTools
                             var pgo = (GameObject)PrefabUtility.InstantiatePrefab(prefab); var ptemps = new List<UnityEngine.Object>();
                             try
                             {
-                                FBX2NPRCompare.FixOriginal(pgo, crit, modelPath, ptemps);
+                                OriginalMaterialFix.Apply(pgo, crit, modelPath, ptemps);
                                 var pr = FBX2NPRParseBake.Bake(pgo, crit, modelPath, parser, 1024, null, null, FBX2NPRConverter.Safe(c));
                                 foreach (var t in pr.textures) labelsOf[t.albedo] = t;
                                 rep.lines.Add("얼굴 파싱: 텍스처 " + pr.textures.Count + "개에 라벨 (정렬 불일치 " + (pr.alignMismatch >= 0 ? (100f * pr.alignMismatch).ToString("F1", CultureInfo.InvariantCulture) + "%" : "-") + ")");

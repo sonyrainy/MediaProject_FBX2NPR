@@ -68,7 +68,7 @@ namespace FBX2NPR.EditorTools
                     var crit = FBX2NPRAssetSettings.FromJson(imp != null ? imp.userData : null) ?? new FBX2NPRAssetSettings();
 
                     var pbr = (GameObject)PrefabUtility.InstantiatePrefab(AssetDatabase.LoadAssetAtPath<GameObject>(r.model));
-                    foreach (var n in FBX2NPRCompare.FixOriginal(pbr, crit, r.model, temps)) log.Add("  " + n);
+                    foreach (var n in OriginalMaterialFix.Apply(pbr, crit, r.model, temps)) log.Add("  " + n);
                     string toonPath = FBX2NPRConverter.OutRoot + "/" + FBX2NPRConverter.Safe(c) + "/" + FBX2NPRConverter.Safe(c) + "_Toon.prefab";
                     var toonPrefab = AssetDatabase.LoadAssetAtPath<GameObject>(toonPath);
                     var toon = toonPrefab != null ? (GameObject)PrefabUtility.InstantiatePrefab(toonPrefab) : null;

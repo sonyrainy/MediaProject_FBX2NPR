@@ -241,7 +241,7 @@ namespace FBX2NPR.EditorTools
                             var pgo = (GameObject)PrefabUtility.InstantiatePrefab(prefab); var ptemps = new List<UnityEngine.Object>();
                             try
                             {
-                                FBX2NPRCompare.FixOriginal(pgo, crit, modelPath, ptemps);
+                                OriginalMaterialFix.Apply(pgo, crit, modelPath, ptemps);
                                 var pr = FBX2NPRParseBake.Bake(pgo, crit, modelPath, parser, 1024, null, string.IsNullOrEmpty(DebugDir) ? null : DebugDir, Safe(c));
                                 foreach (var l in pr.log) rep.lines.Add("  얼굴 파싱 · " + l.Trim());
                                 foreach (var t in pr.textures) labelsOf[t.albedo] = t;
