@@ -1,0 +1,950 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FBX2NPR 얼굴 툰 필터</title>
+<style>
+  :root { --bg:#16161a; --panel:#1f1f25; --line:#33333c; --text:#e8e8ee; --sub:#9a9aa8; --accent:#8fb4ff; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:14px/1.45 "Malgun Gothic", system-ui, sans-serif; }
+  #wrap { display:flex; gap:16px; padding:16px; min-height:100vh; }
+  #stage { flex:1; min-width:0; display:flex; flex-direction:column; align-items:center; gap:8px; }
+  #gl { max-width:100%; max-height:calc(100vh - 80px); width:auto; height:auto; background:#000; border-radius:6px; }
+  #status { color:var(--sub); font-size:13px; text-align:center; }
+  #panel { width:300px; flex:none; background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:12px 14px; overflow:auto; max-height:calc(100vh - 32px); }
+  h1 { font-size:15px; margin:0 0 4px; }
+  .desc { color:var(--sub); font-size:12px; margin:0 0 10px; }
+  h2 { font-size:13px; margin:14px 0 6px; color:var(--accent); }
+  .row { display:grid; grid-template-columns:1fr 46px; gap:2px 8px; align-items:center; margin:6px 0; }
+  .row label { font-size:12.5px; }
+  .row input[type=range] { grid-column:1 / span 2; width:100%; }
+  .row .v { text-align:right; color:var(--sub); font-size:12px; font-variant-numeric:tabular-nums; }
+  .chk { display:flex; align-items:center; gap:6px; margin:5px 0; font-size:12.5px; }
+  .src a { color:var(--accent); margin-right:10px; font-size:12.5px; }
+  .src a.on { color:var(--text); font-weight:bold; text-decoration:none; }
+  .preset { display:flex; gap:6px; flex-wrap:wrap; margin:4px 0 2px; }
+  .preset button { font:inherit; font-size:12px; color:var(--text); background:transparent; border:1px solid var(--line); border-radius:5px; padding:4px 9px; cursor:pointer; white-space:nowrap; }
+  .preset button:hover { border-color:var(--sub); }
+  .preset button.on { background:var(--accent); border-color:var(--accent); color:#16161a; }
+  .preset button.empty { color:var(--sub); border-style:dashed; }
+  .preset .psave { margin-left:auto; }
+  .lmode { display:flex; margin:2px 0 8px; }
+  .lmode button { flex:1; font:inherit; font-size:12px; color:var(--text); background:transparent; border:1px solid var(--line); padding:5px 4px; cursor:pointer; white-space:nowrap; }
+  .lmode button:first-child { border-radius:5px 0 0 5px; }
+  .lmode button:last-child { border-radius:0 5px 5px 0; border-left:none; }
+  .lmode button.on { background:var(--accent); border-color:var(--accent); color:#16161a; }
+  .light { display:flex; align-items:center; gap:12px; margin:4px 0 2px; user-select:none; }
+  .light canvas { width:148px; height:148px; flex:none; touch-action:none; cursor:grab; border-radius:50%; }
+  .light canvas:active { cursor:grabbing; }
+  .light canvas:focus { outline:none; }
+  .light canvas:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+  .light .info { flex:1; min-width:0; display:flex; flex-direction:column; gap:8px; }
+  .light .read { display:flex; flex-direction:column; font-size:13px; white-space:nowrap; }
+  .light .read span { color:var(--sub); font-size:11px; }
+  .light .read b { font-weight:normal; font-variant-numeric:tabular-nums; margin-bottom:3px; }
+  .light button { font:inherit; font-size:12px; color:var(--text); background:transparent; border:1px solid var(--line); border-radius:5px; padding:4px 6px; cursor:pointer; white-space:nowrap; }
+  .light button:hover { border-color:var(--sub); }
+  .light .seg { display:flex; }
+  .light .seg button { flex:1; border-radius:0; padding:4px 3px; }
+  .light .seg button:first-child { flex:0 0 32px; }
+  .light .seg button:first-child { border-radius:5px 0 0 5px; }
+  .light .seg button:last-child { border-radius:0 5px 5px 0; border-left:none; }
+  .light .seg button.on { background:var(--accent); border-color:var(--accent); color:#16161a; }
+  @media (max-width:800px) { #wrap { flex-direction:column; } #panel { width:100%; max-height:none; } }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <div id="stage">
+    <canvas id="gl"></canvas>
+    <div id="status">불러오는 중…</div>
+  </div>
+  <aside id="panel">
+    <h1>FBX2NPR 얼굴 툰 필터 (2단계)</h1>
+    <p class="desc">실제 얼굴의 피부를 평평한 툰 색으로 바꾸고, 원형 패드로 정한 빛에 따라 FBX2NPR의 툰 그림자 띠와 외곽선을 입힙니다. 영상은 이 브라우저 안에서만 처리됩니다.</p>
+    <div class="src" id="src"></div>
+    <div id="controls"></div>
+  </aside>
+</div>
+<script type="importmap">{ "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js" } }</script>
+<script type="module">
+import * as THREE from 'three';
+import { FaceLandmarker, FilesetResolver } from 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs';
+
+const VISION_WASM = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm';
+const MODEL = 'https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task';
+const params = new URLSearchParams(location.search);
+const SRC = params.get('src') || 'cam';                       // cam | front | turn
+const IMAGES = { front: 'test_ch07_front.png', turn: 'test_ch07_turn.png' };
+const statusEl = document.getElementById('status');
+const say = (t) => { statusEl.textContent = t; };
+
+// ---- 설정 (기본값은 Unity ToonBand 의 의미를 그대로 따름)
+const S = {
+  normal: 1.0,     // 0 = 추적 메시 원본 노멀, 1 = 구면 정리 노멀 (FBX2NPR 방식)
+  // 빛 방향 (화면 기준): 원형 패드 안의 점 위치. x 오른쪽 · y 위, 가운데 = 정면광, 가장자리 = 측면광
+  lightX: -0.444,  // 기본값은 예전 az=130 (정면에서 왼쪽으로 40° = 40/90, 수평)과 같다
+  lightY: 0,
+  lightBack: false,// true = 얼굴 뒤에서 비춤 (역광)
+  lightAuto: true, // true = 실제 방의 빛을 얼굴 밝기로 추정해 따라간다, false = 패드로 정한 빛 (점을 끌면 수동으로 바뀐다)
+  stop: 0.45,      // 명암선 위치 (_CurveStop). 0.45 면 바깥 눈꼬리에서 내려온다
+  tilt: 0.6,       // 턱으로 끌어당기는 세기 (_CurveTilt)
+  bend: 0.4,       // 휘는 구간 (_ChinBend)
+  soft: 0.03,      // 경계 부드러움 (_CurveSoft)
+  toon: 1.0,       // 얼굴 전체 툰: 0 = 실사 그대로(그림자 띠·선만 덧입힘), 1 = 피부를 평평한 툰 피부색으로
+  toonKeep: 0.2,   // 원래 영상의 밝기 변화를 얼마나 남길지 (0 = 완전히 평평 — 방 조명이 전혀 안 보임)
+  toonBright: 1.1, // 툰 피부색 밝기 (볼·콧등 평균 피부색의 배수)
+  toonLevels: 4,   // 피부가 아닌 곳(눈·눈썹·입 안)의 밝기 단계 수
+  bgToon: 0.8,     // 화면 전체(얼굴 밖) 약한 툰 세기: 0 = 실사 그대로
+  bgLevels: 5,     // 화면 전체 밝기 단계 수 (많을수록 원본에 가깝다)
+  bgEdge: 0.5,     // 화면 전체 경계선 진하기
+  shadow: 0.85,    // 그림자 진하기
+  skinColor: true, // 그림자 색: true = 피부색 기반(자연), false = 지정 색
+  skinDark: 0.75,  // 피부색 기반일 때 그림자 밝기
+  skinSat: 1.35,   // 피부색 기반일 때 채도 (1 = 그대로)
+  skinWarm: 0.6,   // 피부색 기반일 때 붉은 기
+  tint: '#bdaed6', // 지정 색 (Unity 툰의 회보라)
+  depthK: 0.2,     // 구 중심 깊이 (얼굴 폭 배수)
+  foreExt: 1.0,    // 이마 연장 길이 (눈썹~메시 윗변 높이 배수). 메시가 이마 중간에서 끝나 앞머리 없는 이마에서 그림자가 끊기는 것을 메운다
+  thick: 1.5,      // 외곽선 두께 (px)
+  dark: 0.15,      // 외곽선 진하기 (곱셈값, 낮을수록 진함)
+  inner: 1.0,      // 안쪽 선(노멀 경계) 세기
+  depthPx: 6,      // 깊이 경계로 볼 높이 차 (px)
+  normLo: 1.2,     // 안쪽 선으로 볼 노멀 변화 기준 (높을수록 선이 적다)
+  noEyeLine: false,// 눈 둘레 외곽선 끄기 (실제 속눈썹 위에 선이 겹치지 않게)
+  eyeScale: 1.3,   // 선을 끄는 눈 주변 범위 (눈 윤곽 배수, 세로는 더 넓게)
+  showShade: true, showLine: true, debug: false, smooth: true,
+  mirror: SRC === 'cam',
+};
+const S_DEFAULT = { ...S };   // 코드 기본값 (프리셋의 '기본값' 버튼)
+
+// ---- 프리셋: 패널 값 묶음을 이 브라우저(localStorage)에 저장·불러오기. 1번에는 직접 맞춘 값이 처음부터 들어 있다.
+// 좌우 반전(소스마다 다름)과 명암만 보기(점검용)는 프리셋에 넣지 않는다
+const PRESET_SLOTS = [1, 2, 3], PRESET_SKIP = new Set(['mirror', 'debug']);
+const PRESET_BUILTIN = {
+  1: { normal: 0.75, stop: 0.63, tilt: 0.6, bend: 0.4, soft: 0.03, shadow: 0.85, skinColor: true, skinDark: 0.75, skinSat: 1.35, skinWarm: 0.6, tint: '#bdaed6',
+       depthK: 0.2, foreExt: 1.0, toon: 0.44, toonKeep: 0.2, toonBright: 1.1, toonLevels: 8, bgToon: 0.8, bgLevels: 5, bgEdge: 0.5,
+       thick: 1.5, dark: 0.15, inner: 1.0, depthPx: 17, normLo: 1.65, noEyeLine: false, eyeScale: 1.15, showShade: true, showLine: true, smooth: true,
+       lightAuto: true, lightX: -0.444, lightY: 0, lightBack: false },
+};
+const store = {   // 사생활 보호 모드 등에서 저장소가 막혀도 페이지는 그대로 돌아가게
+  get(k) { try { return localStorage.getItem(k); } catch { return null; } },
+  set(k, v) { try { localStorage.setItem(k, v); return true; } catch { return false; } },
+};
+let presetSel = PRESET_SLOTS.includes(+store.get('arface.preset.last')) ? +store.get('arface.preset.last') : 1;
+function presetData(n) { let p = null; try { p = JSON.parse(store.get(`arface.preset.${n}`)); } catch {} return p || PRESET_BUILTIN[n] || null; }
+function presetSnapshot() { const p = {}; for (const k in S) if (!PRESET_SKIP.has(k)) p[k] = S[k]; return p; }
+function applyPreset(n) {   // n = 0 이면 코드 기본값
+  const p = n === 0 ? S_DEFAULT : presetData(n); if (!p) return false;
+  for (const k in p) if (k in S && !PRESET_SKIP.has(k)) S[k] = p[k];
+  if (S.lightAuto) { const l = lightDir(); lightEst.set(l.x, l.y, l.z); lightEstT = lastTick / 1000; }   // 자동 빛은 지금 자리에서 추정값으로 부드럽게 옮겨 간다
+  applyUniforms(); syncPanel(); return true;
+}
+
+// ---- 소스 링크
+document.getElementById('src').innerHTML = [['cam', '웹캠'], ['front', '시험 그림(정면)'], ['turn', '시험 그림(측면)']]
+  .map(([k, t]) => `<a href="?src=${k}" class="${k === SRC ? 'on' : ''}">${t}</a>`).join('');
+
+// ---- 손떨림 보정 (One Euro 필터)
+class OneEuro {
+  constructor(minCutoff = 1.2, beta = 0.015, dCutoff = 1.0) { this.mc = minCutoff; this.b = beta; this.dc = dCutoff; this.x = null; this.dx = 0; this.t = null; }
+  static a(cutoff, dt) { const tau = 1 / (2 * Math.PI * cutoff); return 1 / (1 + tau / dt); }
+  f(x, t) {
+    if (this.t === null) { this.t = t; this.x = x; return x; }
+    const dt = Math.max(1e-3, t - this.t); this.t = t;
+    const dx = (x - this.x) / dt, ad = OneEuro.a(this.dc, dt);
+    this.dx = ad * dx + (1 - ad) * this.dx;
+    const al = OneEuro.a(this.mc + this.b * Math.abs(this.dx), dt);
+    this.x = al * x + (1 - al) * this.x; return this.x;
+  }
+}
+
+// ---- 소스 준비
+let W = 1280, H = 720, srcTex, video = null, image = null;
+async function openSource() {
+  if (SRC === 'cam') {
+    video = document.createElement('video'); video.playsInline = true; video.muted = true;
+    try {
+      video.srcObject = await navigator.mediaDevices.getUserMedia({ video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: 'user' }, audio: false });
+    } catch (e) { say('웹캠을 열지 못했습니다: ' + e.name + ' (권한을 허용했는지 확인해 주세요)'); throw e; }
+    await video.play();
+    W = video.videoWidth; H = video.videoHeight;
+    srcTex = new THREE.VideoTexture(video);
+  } else {
+    image = new Image();
+    // decode() 는 탭이 뒤에 있을 때 끝나지 않는 일이 있어 onload 로 기다린다
+    await new Promise((res, rej) => { image.onload = res; image.onerror = () => rej(new Error('시험 그림을 불러오지 못했습니다')); image.src = IMAGES[SRC] || IMAGES.turn; });
+    W = image.naturalWidth; H = image.naturalHeight;
+    srcTex = new THREE.Texture(image); srcTex.needsUpdate = true;
+  }
+  srcTex.colorSpace = THREE.NoColorSpace;
+}
+
+// ---- 얼굴 추적기
+let landmarker;
+async function openLandmarker() {
+  const fileset = await FilesetResolver.forVisionTasks(VISION_WASM);
+  const opts = (delegate) => ({ baseOptions: { modelAssetPath: MODEL, delegate }, runningMode: SRC === 'cam' ? 'VIDEO' : 'IMAGE', numFaces: 1 });
+  try { landmarker = await FaceLandmarker.createFromOptions(fileset, opts('GPU')); }
+  catch (e) { console.warn('GPU 추론 실패, CPU 로 전환', e); landmarker = await FaceLandmarker.createFromOptions(fileset, opts('CPU')); }
+}
+
+// ---- 추적 메시의 삼각형: 연결선(테셀레이션)에서 세 변이 모두 있는 꼭짓점 셋을 찾는다
+// 이렇게 찾으면 (1) 면이 아닌 삼각 고리가 섞이고 (2) 꼭짓점 순서가 제각각이라 노멀이 엉킨다.
+// 그래서 세 변이 모두 3개 이상의 삼각형에 걸린 가짜 면을 빼고, 이웃끼리 공유 변을 반대 방향으로 지나도록 감김을 맞춘다.
+const triInfo = { found: 0, removed: 0, flipped: 0 };
+function buildTriangles(nv) {
+  const adj = Array.from({ length: nv }, () => new Set());
+  for (const c of FaceLandmarker.FACE_LANDMARKS_TESSELATION) { adj[c.start].add(c.end); adj[c.end].add(c.start); }
+  let tris = [];
+  for (let a = 0; a < nv; a++) for (const b of adj[a]) if (b > a) for (const c of adj[b]) if (c > b && adj[a].has(c)) tris.push([a, b, c]);
+  triInfo.found = tris.length;
+  const key = (u, v) => u < v ? u + ',' + v : v + ',' + u;
+  const count = new Map();
+  for (const t of tris) for (let k = 0; k < 3; k++) { const e = key(t[k], t[(k + 1) % 3]); count.set(e, (count.get(e) || 0) + 1); }
+  tris = tris.filter(t => ![0, 1, 2].every(k => count.get(key(t[k], t[(k + 1) % 3])) >= 3));
+  triInfo.removed = triInfo.found - tris.length;
+  const byEdge = new Map();
+  tris.forEach((t, i) => { for (let k = 0; k < 3; k++) { const e = key(t[k], t[(k + 1) % 3]); if (!byEdge.has(e)) byEdge.set(e, []); byEdge.get(e).push(i); } });
+  const has = (t, u, v) => (t[0] === u && t[1] === v) || (t[1] === u && t[2] === v) || (t[2] === u && t[0] === v);
+  const seen = new Array(tris.length).fill(false);
+  for (let s = 0; s < tris.length; s++) {
+    if (seen[s]) continue; seen[s] = true; const queue = [s];
+    while (queue.length) {
+      const i = queue.shift(), t = tris[i];
+      for (let k = 0; k < 3; k++) {
+        const u = t[k], v = t[(k + 1) % 3];
+        for (const j of byEdge.get(key(u, v))) {
+          if (seen[j]) continue;
+          if (has(tris[j], u, v)) { tris[j] = [tris[j][0], tris[j][2], tris[j][1]]; triInfo.flipped++; }   // 이웃은 u→v 가 아니라 v→u 여야 한다
+          seen[j] = true; queue.push(j);
+        }
+      }
+    }
+  }
+  return tris.flat();
+}
+
+// 눈 윤곽(위·아래 눈꺼풀) 연결선을 한 바퀴 고리로 잇는다 — 눈 둘레 선을 끄는 마스크용
+function buildLoop(conns) {
+  const adj = new Map();
+  for (const c of conns) {
+    if (!adj.has(c.start)) adj.set(c.start, []); if (!adj.has(c.end)) adj.set(c.end, []);
+    adj.get(c.start).push(c.end); adj.get(c.end).push(c.start);
+  }
+  const start = conns[0].start, loop = [start]; let prev = -1, cur = start;
+  for (let guard = 0; guard < 200; guard++) {
+    const next = adj.get(cur).find(n => n !== prev);
+    if (next === undefined || next === start) break;
+    loop.push(next); prev = cur; cur = next;
+  }
+  return loop;
+}
+
+// ---- 셰이더
+const shadeVS = `attribute float aExt; varying vec3 vPos; varying vec3 vNor; varying float vExt;
+void main(){ vPos = position; vNor = normal; vExt = aExt; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`;
+
+// Unity ToonBand.shader 의 얼굴 명암선 식을 그대로 옮김: 구면 노멀 + 수평 N·L + 턱 끝 기준 지수함수 임계값
+const shadeFS = `varying vec3 vPos; varying vec3 vNor; varying float vExt;   // vExt: 이마 연장 띠 안에서 0(메시 윗변) → 1(연장 끝)
+uniform vec3 uCenter, uUp, uNose, uLightH;   // uLightH: 빛의 수평 성분 (길이 = cos 고도)
+uniform float uChinScale, uBrowH, uTopH, uStop, uTilt, uBend, uSoft, uBlend, uLightV;   // uLightV: 빛의 위아래 성분 (sin 고도)
+uniform sampler2D tVideo; uniform vec2 uRes, uSkinA, uSkinB, uSkinC; uniform float uMirror, uExtOn;
+vec3 Vid(vec2 uv) { return texture2D(tVideo, uMirror > 0.5 ? vec2(1.0 - uv.x, uv.y) : uv).rgb; }
+float Luma(vec3 c) { return dot(c, vec3(0.299, 0.587, 0.114)); }
+vec2 Chroma(vec3 c) { return vec2(dot(c, vec3(-0.169, -0.331, 0.5)), dot(c, vec3(0.5, -0.419, -0.081))) / max(Luma(c), 0.04); }   // 밝기로 나눈 색도
+// 그 자리 영상 색이 볼·콧등에서 잰 피부색과 얼마나 비슷한가. 합성 패스의 얼굴 전체 툰과 같은 판정(색도 + 아주 어두운 털만 빼는 밝기)이라
+// 머리카락 그늘로 어두워진 이마도 피부로 본다. 잔머리 한 올 한 올에 얼룩지지 않도록 주변 몇 px 를 평균해서 본다
+float SkinLike() {
+  vec2 uv = gl_FragCoord.xy / uRes, d = 3.0 / uRes;
+  vec3 v = (Vid(uv) * 2.0 + Vid(uv + d) + Vid(uv - d) + Vid(uv + vec2(d.x, -d.y)) + Vid(uv + vec2(-d.x, d.y))) / 6.0;
+  vec3 ref = (Vid(uSkinA) + Vid(uSkinB) + Vid(uSkinC)) / 3.0;
+  return (1.0 - smoothstep(0.12, 0.25, length(Chroma(v) - Chroma(ref)))) * smoothstep(0.25, 0.45, Luma(v) / max(Luma(ref), 1e-3));
+}
+// 원본 노멀 → 구면 노멀 구면 보간. Unity RadialNormals.cs 의 SlerpSafe 와 같다 (Lerp 후 정규화는 사잇각이 큰 곳에서 최대 34° 어긋났다)
+vec3 SlerpN(vec3 a, vec3 b, float t) {
+  float th = acos(clamp(dot(a, b), -1.0, 1.0));
+  if (th < 1e-4) return normalize(mix(a, b, t));
+  if (th > 3.14149) return t < 0.5 ? a : b;
+  return normalize((sin((1.0 - t) * th) * a + sin(t * th) * b) / sin(th));
+}
+// 수평 N·L 에 위아래 성분을 더한다. 빛이 수평이면(uLightV = 0) Unity 의 HorizNdotL 과 똑같다.
+float FaceNdotL(vec3 nrm, vec3 up) {
+  vec3 h = nrm - up * dot(nrm, up);
+  return dot(h, uLightH) / max(length(h), 0.35) + dot(nrm, up) * uLightV;
+}
+void main(){
+  vec3 nRadial = normalize(vPos - uCenter);
+  vec3 nOrig = normalize(vNor);
+  vec3 n = SlerpN(nOrig, nRadial, uBlend);
+  float hC = dot(vPos - uNose, uUp) + uChinScale;                 // 턱 끝 기준 높이
+  float stopC = uStop;
+  // 턱으로 휘는 선은 옆에서 오는 빛의 모양이라 수평 성분만큼만 준다 (바로 위·아래에서 비추면 사라짐)
+  if (uTilt > 0.0001) stopC += uTilt * length(uLightH) * exp(min(-hC / max(uChinScale * uBend, 1e-4), 8.0));
+  float lit = smoothstep(stopC - uSoft, stopC + uSoft, FaceNdotL(n, uUp));
+  // 눈썹 높이부터 위(이마·관자놀이)는 추적 메시 테두리가 머리선과 안 맞고 들쭉날쭉해 선을 긋지 않는다
+  float forehead = smoothstep(mix(uBrowH, uTopH, -0.08), mix(uBrowH, uTopH, 0.12), hC);
+  float topFade;
+  if (uExtOn > 0.5) {
+    // 이마 연장: 추적 메시는 이마 중간에서 끝나므로 위로 늘린 띠까지 그림자를 잇고, 이마 위쪽은 피부색인 곳에만 준다.
+    // 앞머리가 없으면 실제 머리선에서, 있으면 앞머리 경계에서 그림자가 멈춘다. 연장 띠 끝에서만 서서히 사라진다.
+    float gate = smoothstep(mix(uBrowH, uTopH, 0.3), mix(uBrowH, uTopH, 0.6), hC);   // 눈썹(어두운 털)은 거르지 않게 그 위부터
+    topFade = (1.0 - smoothstep(0.7, 1.0, vExt)) * (gate > 0.0 ? mix(1.0, SkinLike(), gate) : 1.0);   // 이마 위쪽에서만 영상을 읽는다
+  } else {
+    topFade = 1.0 - smoothstep(mix(uBrowH, uTopH, 0.25), mix(uBrowH, uTopH, 0.95), hC);   // 메시 윗변에서 그림자가 네모나게 끊기지 않도록
+  }
+  gl_FragColor = vec4(lit, forehead, topFade, 1.0);
+}`;
+
+// 외곽선용: 추적 메시의 원본 노멀과 깊이를 기록 (듀얼 노멀 — 음영은 구면 노멀, 선은 원본 노멀)
+const normFS = `varying vec3 vPos; varying vec3 vNor;
+void main(){ gl_FragColor = vec4(normalize(vNor) * 0.5 + 0.5, vPos.z); }`;
+
+const compVS = `varying vec2 vUv; void main(){ vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }`;
+const compFS = `varying vec2 vUv;
+uniform sampler2D tVideo, tShade, tNorm, tEye;
+uniform vec2 uRes, uSkinA, uSkinB, uSkinC; uniform vec3 uTint;
+uniform float uMirror, uShadow, uThick, uDark, uInner, uDepthPx, uNormLo, uShowShade, uShowLine, uDebug;
+uniform float uShadeMode, uSkinDark, uSkinSat, uSkinWarm;
+uniform float uToon, uToonKeep, uToonBright, uLevels, uLipLit;
+uniform vec2 uLipS[6];   // 입술 색을 잴 자리
+uniform float uBgToon, uBgLevels, uBgEdge;
+const vec2 OFS[8] = vec2[8](vec2(-1,-1), vec2(0,-1), vec2(1,-1), vec2(-1,0), vec2(1,0), vec2(-1,1), vec2(0,1), vec2(1,1));
+const float KX[8] = float[8](-1.0, 0.0, 1.0, -2.0, 2.0, -1.0, 0.0, 1.0);
+const float KY[8] = float[8](-1.0, -2.0, -1.0, 0.0, 0.0, 1.0, 2.0, 1.0);
+vec3 Vid(vec2 uv) { return texture2D(tVideo, uMirror > 0.5 ? vec2(1.0 - uv.x, uv.y) : uv).rgb; }
+float Luma(vec3 c) { return dot(c, vec3(0.299, 0.587, 0.114)); }
+vec2 Chroma(vec3 c) { return vec2(dot(c, vec3(-0.169, -0.331, 0.5)), dot(c, vec3(0.5, -0.419, -0.081))) / max(Luma(c), 0.04); }   // 밝기로 나눈 색도
+void main(){
+  vec3 vid = Vid(vUv), col = vid;   // vid: 원본 영상 (얼굴 툰 판정은 늘 원본으로)
+  vec4 sh = texture2D(tShade, vUv);
+  float cover = sh.a, lit = sh.r, lipM = texture2D(tEye, vUv).g;
+  // 입술은 한 덩어리로 밝거나 어둡다 (입 가운데에서 잰 값) — 명암선이 입술을 가르지 않고 둘레를 돌아간다
+  lit = mix(lit, uLipLit, lipM);
+  float faceW = cover > 0.5 ? uToon * sh.b : 0.0;   // 강한 얼굴 툰이 덮는 정도
+  if (uBgToon > 0.0 && faceW < 1.0) {
+    // 화면 전체 약한 툰: 주변 8곳(2px)을 한 번만 읽어 (1) 밝기가 비슷한 이웃끼리만 평균(경계는 남기는 흐림)과
+    // (2) 밝기 Sobel 경계선에 같이 쓴다. 그다음 밝기를 부드러운 계단으로 나눈다
+    float y0 = Luma(vid), wsum = 1.0, gx = 0.0, gy = 0.0;
+    vec3 acc = vid;
+    for (int k = 0; k < 8; k++) {
+      vec3 s = Vid(vUv + OFS[k] * 2.0 / uRes);
+      float ys = Luma(s), dy = (ys - y0) * 10.0, wk = exp(-dy * dy);
+      acc += s * wk; wsum += wk; gx += KX[k] * ys; gy += KY[k] * ys;
+    }
+    vec3 sm = acc / wsum;
+    float ym = Luma(sm), q = (floor(ym * uBgLevels) + smoothstep(0.3, 0.7, fract(ym * uBgLevels))) / uBgLevels;
+    vec3 bg = sm * (q / max(ym, 1e-3)) * (1.0 - uBgEdge * smoothstep(0.3, 0.6, length(vec2(gx, gy))));   // 큰 밝기 경계에만 선
+    col = mix(col, clamp(bg, 0.0, 1.0), uBgToon * (1.0 - faceW));
+  }
+  if (uToon > 0.0 && cover > 0.5) {
+    // 얼굴 전체 툰. 웹캠 잡음에 판정이 흔들리지 않게 주변을 조금 평균한 색으로 본다
+    vec2 o = 1.5 / uRes;
+    vec3 b = (vid * 2.0 + Vid(vUv + o) + Vid(vUv - o) + Vid(vUv + vec2(o.x, -o.y)) + Vid(vUv + vec2(-o.x, o.y))) / 6.0;
+    vec3 ref = (Vid(uSkinA) + Vid(uSkinB) + Vid(uSkinC)) / 3.0;   // 양 볼·콧등 피부색
+    float yb = Luma(b), yr = max(Luma(ref), 1e-3), k = yb / yr;
+    // 피부 판정은 색도로: 방 조명 때문에 어두워진 피부도 피부로 본다. 아주 어둡거나(눈썹·속눈썹·머리카락) 아주 밝은 곳(흰자)은 뺀다
+    float w = (1.0 - smoothstep(0.12, 0.25, length(Chroma(b) - Chroma(ref)))) * smoothstep(0.3, 0.5, k) * (1.0 - smoothstep(1.5, 2.0, k));
+    w *= 1.0 - lipM;
+    vec3 flatSkin = clamp(ref * uToonBright * mix(1.0, k, uToonKeep), 0.0, 1.0);   // 피부는 기준 피부색 하나로 — 실제 조명의 밝기 변화는 uToonKeep 만큼만 남긴다
+    vec3 post = b * (floor(yb * uLevels + 0.5) / uLevels / max(yb, 1e-3));   // 피부가 아닌 곳(눈·눈썹·입 안)은 밝기를 몇 단계로 나눈다
+    vec3 toon = mix(post, flatSkin, w);
+    if (lipM > 0.0) {   // 입술은 입술 가운데 여섯 곳의 평균색 하나로 — 실제 조명의 입술 음영이 얼룩으로 남지 않게
+      vec3 lipC = vec3(0.0);
+      for (int i = 0; i < 6; i++) lipC += Vid(uLipS[i]);
+      toon = mix(toon, lipC / 6.0, lipM);
+    }
+    col = mix(col, toon, uToon * sh.b);   // sh.b: 이마 위쪽은 피부인 곳만 (머리카락은 실사 그대로)
+  }
+  if (uDebug > 0.5) col = mix(col * 0.35, vec3(lit), cover);
+  else if (uShowShade > 0.5) {
+    vec3 shCol;
+    if (uShadeMode < 0.5) {
+      // 피부색 기반: 그 자리의 실제 피부색을 어둡게 하고 채도를 조금 올린다 (실제 피부 그림자처럼 약간 붉고 진해짐, 피부 톤마다 자동)
+      vec3 s = col * uSkinDark * mix(vec3(1.0), vec3(1.0, 0.82, 0.78), uSkinWarm);   // 그림자 쪽 피부는 붉은 기가 돈다
+      float l = dot(s, vec3(0.299, 0.587, 0.114));
+      shCol = clamp(mix(vec3(l), s, uSkinSat), 0.0, 1.0);
+    } else {
+      shCol = col * uTint;                       // 지정 색 곱하기 (Unity 툰의 회보라 그림자)
+    }
+    col = mix(col, shCol, (1.0 - lit) * cover * uShadow * sh.b);
+  }
+  if (uShowLine > 0.5) {
+    vec2 px = uThick / uRes;
+    vec4 c0 = texture2D(tNorm, vUv);
+    vec3 n0 = c0.rgb * 2.0 - 1.0; float z0 = c0.a;
+    float gxA = 0.0, gyA = 0.0, fm = sh.g * cover, allIn = cover, eyeM = texture2D(tEye, vUv).r;
+    vec3 gxN = vec3(0.0), gyN = vec3(0.0);
+    float zs[8];
+    for (int k = 0; k < 8; k++) {
+      vec2 uv = vUv + OFS[k] * px;
+      vec4 s = texture2D(tShade, uv), m = texture2D(tNorm, uv);
+      bool inFace = s.a > 0.5;
+      vec3 n = inFace ? m.rgb * 2.0 - 1.0 : n0;    // 얼굴 밖은 가운데 값으로 채워 실루엣이 노멀·깊이 경계로 두 번 잡히지 않게
+      zs[k] = inFace ? m.a : z0;
+      gxA += KX[k] * s.a; gyA += KY[k] * s.a;
+      gxN += KX[k] * n;   gyN += KY[k] * n;
+      fm = max(fm, s.g * s.a);
+      allIn = min(allIn, s.a);
+      eyeM = max(eyeM, texture2D(tEye, uv).r);
+    }
+    float eCover = clamp(length(vec2(gxA, gyA)) * 0.5, 0.0, 1.0) * (1.0 - fm);   // 얼굴 테두리·눈·입 구멍
+    // 깊이는 기울기가 아니라 2차 차분으로 본다: 코 옆·얼굴 옆면처럼 가파르기만 한 곳은 0 에 가깝고, 실제로 가려져 끊기는 곳만 커진다
+    float d2 = max(max(abs(zs[3] + zs[4] - 2.0 * z0), abs(zs[1] + zs[6] - 2.0 * z0)),
+                   max(abs(zs[0] + zs[7] - 2.0 * z0), abs(zs[2] + zs[5] - 2.0 * z0)));
+    // 메시 가장자리 바로 안쪽은 테두리 선(eCover)이 이미 그리므로 깊이·노멀 선은 이웃이 모두 얼굴 안일 때만 (관자놀이 잔선 방지)
+    float eDepth = allIn > 0.5 ? smoothstep(0.5 * uDepthPx, uDepthPx, d2) : 0.0;
+    float eNorm = allIn > 0.5 ? smoothstep(uNormLo, uNormLo * 1.6, sqrt(dot(gxN, gxN) + dot(gyN, gyN))) * uInner * (1.0 - fm) : 0.0; // 많이 휘는 곳
+    // 눈 마스크(눈 외곽선 끄기를 켰을 때만 그려짐) 근처에서는 어떤 선도 긋지 않는다
+    float e = clamp(max(eCover, max(eDepth, eNorm)), 0.0, 1.0) * (1.0 - eyeM);
+    col *= mix(1.0, uDark, e);
+  }
+  gl_FragColor = vec4(col, 1.0);
+}`;
+
+// ---- 렌더러와 장면
+const canvas = document.getElementById('gl');
+let renderer, cam, faceScene, mesh, geom, posArr, shadeMat, normMat, rtShade, rtNorm, compScene, compCam, compMat;
+let eyeLoops = [], eyePos, eyeGeom, eyeScene, eyeMesh, rtEye, lipFan, mouthFan;
+const NV = 478;
+// 바깥 입술 윤곽 (입꼬리 → 아랫입술 → 반대 입꼬리 → 윗입술)과 안쪽 입술 윤곽 (벌린 입 구멍)
+const LIP_LOOP = [61, 146, 91, 181, 84, 17, 314, 405, 321, 375, 291, 409, 270, 269, 267, 0, 37, 39, 40, 185];
+const MOUTH_LOOP = [78, 95, 88, 178, 87, 14, 317, 402, 318, 324, 308, 415, 310, 311, 312, 13, 82, 81, 80, 191];
+// 입술 색을 잴 자리: 바깥·안쪽 윤곽의 가운데 (윗입술 가운데·좌·우, 아랫입술 가운데·좌·우)
+const LIP_SAMPLES = [[0, 13], [37, 82], [267, 312], [17, 14], [84, 87], [314, 317]];
+// 윤곽을 중심에서 부채꼴로 채운 마스크 메시 (매 프레임 fillFan 으로 위치를 채운다)
+function makeFan(loop, color, order) {
+  const idx = []; for (let k = 0; k < loop.length; k++) idx.push(0, 1 + k, 1 + (k + 1) % loop.length);
+  const pos = new Float32Array((loop.length + 1) * 3), geom = new THREE.BufferGeometry();
+  geom.setAttribute('position', new THREE.BufferAttribute(pos, 3).setUsage(THREE.DynamicDrawUsage)); geom.setIndex(idx);
+  const mesh = new THREE.Mesh(geom, new THREE.MeshBasicMaterial({ color, side: THREE.DoubleSide, depthTest: false }));
+  mesh.frustumCulled = false; mesh.renderOrder = order;
+  return { loop, pos, geom, mesh };
+}
+function fillFan(f, sx, sy) {
+  let cx = 0, cy = 0;
+  for (const i of f.loop) { cx += posArr[i * 3]; cy += posArr[i * 3 + 1]; }
+  cx /= f.loop.length; cy /= f.loop.length; f.pos[0] = cx; f.pos[1] = cy;
+  f.loop.forEach((i, k) => { const o = (k + 1) * 3; f.pos[o] = cx + (posArr[i * 3] - cx) * sx; f.pos[o + 1] = cy + (posArr[i * 3 + 1] - cy) * sy; });
+  f.geom.attributes.position.needsUpdate = true;
+}
+let tris = [];
+// 이마 연장: 얼굴 테두리 윗부분(관자놀이 위 → 이마 → 반대쪽 관자놀이 위)을 바깥쪽으로 밀어낸 띠를 추적 메시에 덧붙인다
+// (그 아래 관자놀이 테두리는 거의 세로라 밀어내면 메시와 겹쳐 선이 생긴다)
+const FORE_ARC = [21, 54, 103, 67, 109, 10, 338, 297, 332, 284, 251];
+const EXT_ROWS = 3, NE = FORE_ARC.length * EXT_ROWS;
+function buildForeheadTris() {
+  const n = FORE_ARC.length, row = (k, j) => k === 0 ? FORE_ARC[j] : NV + (k - 1) * n + j;
+  // 감김을 추적 메시에 맞춘다: 메시 삼각형이 테두리 변을 a→b 로 지나면 연장 띠는 b→a 로 지나야 노멀이 같은 쪽을 본다
+  let flip = null;
+  for (let j = 0; j + 1 < n && flip === null; j++) {
+    const a = FORE_ARC[j], b = FORE_ARC[j + 1];
+    for (let t = 0; t < tris.length && flip === null; t += 3) for (let e = 0; e < 3; e++) {
+      const p = tris[t + e], q = tris[t + (e + 1) % 3];
+      if (p === a && q === b) flip = true; else if (p === b && q === a) flip = false;
+    }
+  }
+  const out = [];
+  for (let k = 0; k < EXT_ROWS; k++) for (let j = 0; j + 1 < n; j++) {
+    const A = row(k, j), B = row(k, j + 1), C = row(k + 1, j + 1), D = row(k + 1, j);
+    if (flip) out.push(A, C, B, A, D, C); else out.push(A, B, C, A, C, D);
+  }
+  return out;
+}
+function initGL() {
+  canvas.width = W; canvas.height = H;
+  renderer = new THREE.WebGLRenderer({ canvas, antialias: false, preserveDrawingBuffer: true });
+  renderer.outputColorSpace = THREE.LinearSRGBColorSpace;   // 영상 색을 그대로 통과시킨다
+  renderer.setPixelRatio(1); renderer.setSize(W, H, false);
+  cam = new THREE.OrthographicCamera(0, W, H, 0, -5000, 5000);
+  faceScene = new THREE.Scene();
+  tris = buildTriangles(NV);
+  geom = new THREE.BufferGeometry();
+  posArr = new Float32Array((NV + NE) * 3);
+  geom.setAttribute('position', new THREE.BufferAttribute(posArr, 3).setUsage(THREE.DynamicDrawUsage));
+  // 추적 메시 0, 연장 띠는 줄마다 1/3 · 2/3 · 1. 띠 양 끝 열은 1 로 둬서 옆으로도 서서히 사라지게 한다
+  const extArr = new Float32Array(NV + NE), na = FORE_ARC.length;
+  for (let k = 1; k <= EXT_ROWS; k++) for (let j = 0; j < na; j++) extArr[NV + (k - 1) * na + j] = (j === 0 || j === na - 1) ? 1 : k / EXT_ROWS;
+  geom.setAttribute('aExt', new THREE.BufferAttribute(extArr, 1));
+  geom.setIndex(tris.concat(buildForeheadTris()));
+  geom.computeVertexNormals();
+  shadeMat = new THREE.ShaderMaterial({ side: THREE.DoubleSide, vertexShader: shadeVS, fragmentShader: shadeFS, uniforms: {
+    uCenter: { value: new THREE.Vector3() }, uUp: { value: new THREE.Vector3(0, 1, 0) }, uNose: { value: new THREE.Vector3() }, uLightH: { value: new THREE.Vector3(1, 0, 0) }, uLightV: { value: 0 },
+    uChinScale: { value: 1 }, uBrowH: { value: 1 }, uTopH: { value: 2 }, uStop: { value: 0 }, uTilt: { value: 0 }, uBend: { value: 0.4 }, uSoft: { value: 0.03 }, uBlend: { value: 1 },
+    tVideo: { value: srcTex }, uRes: { value: new THREE.Vector2(W, H) }, uMirror: { value: 0 }, uExtOn: { value: 1 },
+    uSkinA: { value: new THREE.Vector2() }, uSkinB: { value: new THREE.Vector2() }, uSkinC: { value: new THREE.Vector2() } } });
+  normMat = new THREE.ShaderMaterial({ side: THREE.DoubleSide, vertexShader: shadeVS, fragmentShader: normFS });
+  mesh = new THREE.Mesh(geom, shadeMat); mesh.frustumCulled = false; faceScene.add(mesh);
+  rtShade = new THREE.WebGLRenderTarget(W, H, { minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter });
+  rtNorm = new THREE.WebGLRenderTarget(W, H, { type: THREE.HalfFloatType, minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter });
+  // 눈 마스크: 두 눈 윤곽을 중심에서 부채꼴로 채운 메시 (넓히는 배수는 매 프레임 적용)
+  eyeLoops = [buildLoop(FaceLandmarker.FACE_LANDMARKS_LEFT_EYE), buildLoop(FaceLandmarker.FACE_LANDMARKS_RIGHT_EYE)];
+  const eyeIdx = []; let base = 0;
+  for (const lp of eyeLoops) { const n = lp.length; for (let k = 0; k < n; k++) eyeIdx.push(base, base + 1 + k, base + 1 + (k + 1) % n); base += n + 1; }
+  eyePos = new Float32Array(base * 3);
+  eyeGeom = new THREE.BufferGeometry();
+  eyeGeom.setAttribute('position', new THREE.BufferAttribute(eyePos, 3).setUsage(THREE.DynamicDrawUsage));
+  eyeGeom.setIndex(eyeIdx);
+  eyeMesh = new THREE.Mesh(eyeGeom, new THREE.MeshBasicMaterial({ color: 0xff0000, side: THREE.DoubleSide, depthTest: false }));   // R 채널
+  eyeMesh.frustumCulled = false; eyeScene = new THREE.Scene(); eyeScene.add(eyeMesh);
+  // 입술 마스크 (G 채널): 입술을 한 가지 색·한 덩어리 명암으로 칠하는 자리. 입술은 피부와 색이 비슷해 색만으로는 못 가른다.
+  // 벌린 입 구멍(이·입안)은 검게 다시 칠해 마스크에서 뺀다
+  lipFan = makeFan(LIP_LOOP, 0x00ff00, 1); mouthFan = makeFan(MOUTH_LOOP, 0x000000, 2);
+  eyeScene.add(lipFan.mesh, mouthFan.mesh);
+  rtEye = new THREE.WebGLRenderTarget(W, H, { minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter });
+  compScene = new THREE.Scene(); compCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+  compMat = new THREE.ShaderMaterial({ vertexShader: compVS, fragmentShader: compFS, depthTest: false, depthWrite: false, uniforms: {
+    tVideo: { value: srcTex }, tShade: { value: rtShade.texture }, tNorm: { value: rtNorm.texture }, tEye: { value: rtEye.texture }, uRes: { value: new THREE.Vector2(W, H) },
+    uTint: { value: new THREE.Vector3(0.74, 0.68, 0.84) }, uMirror: { value: 0 }, uShadow: { value: 0.85 }, uThick: { value: 1.5 }, uDark: { value: 0.15 },
+    uInner: { value: 1 }, uDepthPx: { value: 6 }, uNormLo: { value: 1.2 }, uShadeMode: { value: 0 }, uSkinDark: { value: 0.75 }, uSkinSat: { value: 1.35 }, uSkinWarm: { value: 0.6 }, uShowShade: { value: 1 }, uShowLine: { value: 1 }, uDebug: { value: 0 },
+    uToon: { value: 1 }, uToonKeep: { value: 0.2 }, uToonBright: { value: 1.1 }, uLevels: { value: 4 },
+    uLipS: { value: LIP_SAMPLES.map(() => new THREE.Vector2()) }, uLipLit: { value: 1 },
+    uBgToon: { value: 0.8 }, uBgLevels: { value: 5 }, uBgEdge: { value: 0.5 },
+    uSkinA: shadeMat.uniforms.uSkinA, uSkinB: shadeMat.uniforms.uSkinB, uSkinC: shadeMat.uniforms.uSkinC } });   // 피부색 기준점은 셰이드 패스와 같은 값을 쓴다
+  compScene.add(new THREE.Mesh(new THREE.PlaneGeometry(2, 2), compMat));
+}
+
+// ---- 빛 방향: 패드 점 (x, y) → 빛 벡터. 가운데에서 떨어진 거리에 정면과의 각도가 비례한다 (가장자리 = 90° 측면광).
+// 정사영(z = √(1-r²))으로 하면 가장자리 근처에서 조금만 끌어도 각도가 크게 바뀌어 명암선이 튄다.
+function lightDir() {
+  const x = S.lightX, y = S.lightY, r = Math.hypot(x, y), a = Math.min(r, 1) * Math.PI / 2;
+  const s = r > 1e-6 ? Math.sin(a) / r : Math.PI / 2, z = Math.cos(a);
+  return { x: x * s, y: y * s, z: S.lightBack ? -z : z };
+}
+// 빛 벡터 → 패드 점 (lightDir 의 역). 자동 모드에서 추정한 빛을 패드에 보여 줄 때 쓴다
+function setPadFromDir(L) {
+  const back = L.z < 0, r = Math.acos(Math.min(1, Math.abs(L.z))) / (Math.PI / 2), h = Math.hypot(L.x, L.y);
+  const x = h > 1e-6 ? L.x / h * r : 0, y = h > 1e-6 ? L.y / h * r : 0;
+  if (Math.abs(x - S.lightX) + Math.abs(y - S.lightY) < 0.004 && back === S.lightBack) return;   // 거의 그대로면 패드를 다시 그리지 않는다
+  S.lightX = x; S.lightY = y; S.lightBack = back; drawLightPad();
+}
+
+// ---- 실제 조명 추정 (자동 모드)
+// 얼굴 피부 지점의 영상 밝기를 메시 노멀의 1차식 I ≈ c0 + c·n 으로 최소제곱 맞춤하고 c 의 방향을 빛 방향으로 본다.
+// 램버트 면은 I = 알베도·(주변광 + n·L) 이라 c 가 곧 L 방향이다 (빛 반대쪽이 0 에서 잘리는 탓에 정면 쪽으로 조금 치우친다).
+// 노멀이 카메라 좌표라 추정한 빛도 카메라 기준 — 고개를 돌려도 실제 빛처럼 공간에 고정된다
+let lightPts = null, lightCv = null, lightCtx = null, lightEstT = -1, lightConf = 0;
+const lightEst = new THREE.Vector3(0, 0, 1);
+function solve4(A, b) {   // 4×4 가우스 소거 (부분 피벗)
+  const M = A.map((r, i) => [...r, b[i]]);
+  for (let c = 0; c < 4; c++) {
+    let p = c; for (let r = c + 1; r < 4; r++) if (Math.abs(M[r][c]) > Math.abs(M[p][c])) p = r;
+    if (Math.abs(M[p][c]) < 1e-9) return null;
+    [M[c], M[p]] = [M[p], M[c]];
+    for (let r = 0; r < 4; r++) if (r !== c) { const f = M[r][c] / M[c][c]; for (let k = c; k < 5; k++) M[r][k] -= f * M[c][k]; }
+  }
+  return M.map((r, i) => r[4] / r[i]);
+}
+function estimateLight(t, force = false) {
+  if (!force && lightEstT >= 0 && t - lightEstT < 1 / 15) return;   // 초당 15번이면 충분하다 (영상 읽기 비용을 아낀다)
+  const dt = lightEstT < 0 ? 1 : Math.max(0, t - lightEstT); lightEstT = t;
+  if (!lightPts) {   // 눈·눈썹·입술·홍채·얼굴 테두리를 뺀 피부 지점
+    const ex = new Set();
+    for (const k of ['FACE_LANDMARKS_LEFT_EYE', 'FACE_LANDMARKS_RIGHT_EYE', 'FACE_LANDMARKS_LEFT_EYEBROW', 'FACE_LANDMARKS_RIGHT_EYEBROW',
+                     'FACE_LANDMARKS_LIPS', 'FACE_LANDMARKS_FACE_OVAL', 'FACE_LANDMARKS_LEFT_IRIS', 'FACE_LANDMARKS_RIGHT_IRIS'])
+      for (const c of FaceLandmarker[k] || []) { ex.add(c.start); ex.add(c.end); }
+    lightPts = []; for (let i = 0; i < 468; i++) if (!ex.has(i)) lightPts.push(i);
+    lightCv = document.createElement('canvas'); lightCv.width = Math.max(1, Math.round(W / 4)); lightCv.height = Math.max(1, Math.round(H / 4));
+    lightCtx = lightCv.getContext('2d', { willReadFrequently: true });
+  }
+  const cw = lightCv.width, ch = lightCv.height;
+  lightCtx.drawImage(video || image, 0, 0, cw, ch);   // 1/4 크기로 줄여 읽는다 (줄이면서 4×4 평균이 돼 잡음도 준다)
+  const px = lightCtx.getImageData(0, 0, cw, ch).data;
+  const read = (i) => {   // 랜드마크 자리의 영상 색 (posArr 는 좌우 반전된 화면 좌표, 아래가 0)
+    const x = S.mirror ? W - posArr[i * 3] : posArr[i * 3], y = H - posArr[i * 3 + 1];
+    const u = Math.min(cw - 1, Math.max(0, Math.floor(x / W * cw))), v = Math.min(ch - 1, Math.max(0, Math.floor(y / H * ch))), o = (v * cw + u) * 4;
+    return [px[o] / 255, px[o + 1] / 255, px[o + 2] / 255];
+  };
+  const luma = (c) => 0.299 * c[0] + 0.587 * c[1] + 0.114 * c[2];
+  const chroma = (c) => { const y = Math.max(luma(c), 0.04); return [(-0.169 * c[0] - 0.331 * c[1] + 0.5 * c[2]) / y, (0.5 * c[0] - 0.419 * c[1] - 0.081 * c[2]) / y]; };
+  const refs = [50, 280, 6].map(read), ref = [0, 1, 2].map(k => (refs[0][k] + refs[1][k] + refs[2][k]) / 3);
+  const yr = Math.max(luma(ref), 1e-3), cr = chroma(ref), nrm = geom.attributes.normal.array;
+  const smp = [];   // [밝기(볼·콧등 대비), nx, ny, nz]
+  for (const i of lightPts) {
+    const c = read(i), k = luma(c) / yr, cc = chroma(c);
+    if (k < 0.15 || k > 2.5 || Math.hypot(cc[0] - cr[0], cc[1] - cr[1]) > 0.25) continue;   // 피부가 아닌 곳(머리카락·안경·수염·콧구멍)은 뺀다
+    smp.push([k, nrm[i * 3], nrm[i * 3 + 1], nrm[i * 3 + 2]]);
+  }
+  if (smp.length < 40) return;   // 피부 지점이 너무 적으면 이번 추정은 건너뛴다
+  // 빛 반대쪽은 0 에서 잘려(주변광만 남아) 1차식에서 벗어나고, 그대로 맞추면 옆에서 오는 빛이 더 옆으로 치우친다.
+  // 그래서 한 번 맞춘 뒤 그 빛을 받는 쪽(n·L > 0.1) 지점만으로 두 번 더 맞춘다 (합성 데이터 시험: 정면~측면 90° 모두 오차 1.5° 안)
+  let c = null, dir = null;
+  for (let it = 0; it < 3; it++) {
+    const A = [[0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0]], b = [0, 0, 0, 0]; let m = 0;
+    for (const [k, x, y, z] of smp) {
+      if (dir && x * dir.x + y * dir.y + z * dir.z < 0.1) continue;
+      const row = [1, x, y, z]; m++;
+      for (let r = 0; r < 4; r++) { b[r] += row[r] * k; for (let s = 0; s < 4; s++) A[r][s] += row[r] * row[s]; }
+    }
+    if (m < 30) break;
+    const cc = solve4(A, b); if (!cc) break;
+    c = cc; dir = new THREE.Vector3(c[1], c[2], c[3]).normalize();
+  }
+  if (!c) return;
+  const d = new THREE.Vector3(c[1], c[2], c[3]), mag = d.length();
+  // 방향성 빛이 얼마나 뚜렷한가 (방향 성분 / 전체). 고르게 퍼진 빛일수록 정면광 쪽으로 끌어당겨 그림자를 약하게 둔다
+  lightConf = Math.min(1, Math.max(0, (mag / Math.max(c[0] + mag, 1e-3) - 0.12) / 0.28));
+  const target = mag > 1e-6 ? d.normalize().lerp(new THREE.Vector3(0, 0, 1), 1 - lightConf).normalize() : new THREE.Vector3(0, 0, 1);
+  lightEst.lerp(target, 1 - Math.exp(-dt / 0.25)).normalize();   // 0.25초 시정수로 부드럽게 따라간다
+  setPadFromDir(lightEst); lightStatus();
+}
+
+// 셰이더 SlerpN 의 JS 판 (입술 한 덩어리 명암 계산용)
+function slerpN(a, b, t) {
+  const th = Math.acos(Math.min(1, Math.max(-1, a.dot(b))));
+  if (th < 1e-4) return a.clone().lerp(b, t).normalize();
+  if (th > Math.PI - 1e-4) return (t < 0.5 ? a : b).clone();
+  const s = Math.sin(th);
+  return a.clone().multiplyScalar(Math.sin((1 - t) * th) / s).addScaledVector(b, Math.sin(t * th) / s).normalize();
+}
+
+// ---- 랜드마크 → 메시·머리 좌표계
+const filters = Array.from({ length: NV * 3 }, () => new OneEuro());
+const V = (i) => new THREE.Vector3(posArr[i * 3], posArr[i * 3 + 1], posArr[i * 3 + 2]);
+let faceH = 0;
+function updateFace(lms, t) {
+  for (let i = 0; i < NV; i++) {
+    const l = lms[i];
+    let x = (S.mirror ? 1 - l.x : l.x) * W, y = (1 - l.y) * H, z = -l.z * W;   // MediaPipe z 는 작을수록 카메라에 가깝다
+    if (S.smooth && SRC === 'cam') { x = filters[i * 3].f(x, t); y = filters[i * 3 + 1].f(y, t); z = filters[i * 3 + 2].f(z, t); }
+    posArr[i * 3] = x; posArr[i * 3 + 1] = y; posArr[i * 3 + 2] = z;
+  }
+  // 눈 마스크: 눈 윤곽을 중심에서 넓힌다 (눈은 가로로 길어서 세로는 더 넓게 — 속눈썹·쌍꺼풀 선까지 덮도록)
+  let base = 0;
+  const sx = S.eyeScale, sy = 1 + (S.eyeScale - 1) * 2.5;
+  for (const lp of eyeLoops) {
+    let cx = 0, cy = 0, cz = 0;
+    for (const i of lp) { cx += posArr[i * 3]; cy += posArr[i * 3 + 1]; cz += posArr[i * 3 + 2]; }
+    cx /= lp.length; cy /= lp.length; cz /= lp.length;
+    eyePos[base * 3] = cx; eyePos[base * 3 + 1] = cy; eyePos[base * 3 + 2] = cz;
+    lp.forEach((i, k) => { const o = (base + 1 + k) * 3; eyePos[o] = cx + (posArr[i * 3] - cx) * sx; eyePos[o + 1] = cy + (posArr[i * 3 + 1] - cy) * sy; eyePos[o + 2] = cz; });
+    base += lp.length + 1;
+  }
+  eyeGeom.attributes.position.needsUpdate = true;
+  // 입술 마스크: 바깥 윤곽은 조금 넓혀 입술 가장자리까지 덮고, 입 구멍은 그대로
+  fillFan(lipFan, 1.06, 1.15); fillFan(mouthFan, 1, 1);
+  LIP_SAMPLES.forEach(([a, b], k) => compMat.uniforms.uLipS.value[k].set((posArr[a * 3] + posArr[b * 3]) / 2 / W, (posArr[a * 3 + 1] + posArr[b * 3 + 1]) / 2 / H));
+
+  const nose = V(1), chin = V(152), top = V(10), L = V(234), R = V(454), brow = V(9);
+  const up = top.clone().sub(chin).normalize();
+  let right = R.clone().sub(L); right.addScaledVector(up, -right.dot(up)).normalize();
+  if (right.x < 0) right.negate();
+  const fwd = new THREE.Vector3().crossVectors(right, up).normalize(); if (fwd.z < 0) fwd.negate();
+  right = new THREE.Vector3().crossVectors(up, fwd).normalize(); if (right.x < 0) right.negate();
+  const faceW = L.distanceTo(R);
+  const center = L.clone().add(R).multiplyScalar(0.5).addScaledVector(fwd, -S.depthK * faceW);
+  // 이마 연장 띠: 테두리 각 점을 테두리에 수직인 바깥쪽(위쪽으로 조금 기울임)으로 밀고, 조금 뒤로 넘겨 이마가 정수리로 넘어가는 곡면을 흉내 낸다
+  const ext = S.foreExt * Math.max(1, top.clone().sub(brow).dot(up));   // 눈썹~메시 윗변 높이의 배수
+  const mid = L.clone().add(R).multiplyScalar(0.5), arc = FORE_ARC.map(V), na = arc.length;
+  arc.forEach((p, j) => {
+    const tg = arc[Math.min(na - 1, j + 1)].clone().sub(arc[Math.max(0, j - 1)]);
+    let dx = -tg.dot(up), dy = tg.dot(right);                                     // 접선을 얼굴 평면에서 90° 돌린 방향
+    const rel = p.clone().sub(mid); if (dx * rel.dot(right) + dy * rel.dot(up) < 0) { dx = -dx; dy = -dy; }   // 얼굴 바깥쪽으로
+    const l = Math.hypot(dx, dy) || 1; dx /= l; dy = dy / l + 0.6; const l2 = Math.hypot(dx, dy); dx /= l2; dy /= l2;   // 이 방향을 위쪽과 섞는다
+    for (let k = 1; k <= EXT_ROWS; k++) {
+      const s = ext * k / EXT_ROWS, o = (NV + (k - 1) * na + j) * 3;
+      const q = p.clone().addScaledVector(right, dx * s).addScaledVector(up, dy * s).addScaledVector(fwd, -0.5 * s);
+      posArr[o] = q.x; posArr[o + 1] = q.y; posArr[o + 2] = q.z;
+    }
+  });
+  geom.attributes.position.needsUpdate = true;
+  geom.computeVertexNormals();
+  const nrm = geom.attributes.normal.array;
+  if (nrm[1 * 3 + 2] < 0) { for (let i = 0; i < nrm.length; i++) nrm[i] = -nrm[i]; geom.attributes.normal.needsUpdate = true; }  // 좌우 반전 등으로 감김이 뒤집히면 노멀을 카메라 쪽으로
+
+  // 빛은 화면(카메라) 기준이다: 패드 오른쪽 = 화면 오른쪽에서 오는 빛. 고개를 돌리면 얼굴에 대한 빛 방향이 바뀌어 명암도 따라 바뀐다
+  const ld = lightDir(), Lw = new THREE.Vector3(ld.x, ld.y, ld.z), lv = Lw.dot(up);
+  const u = shadeMat.uniforms;
+  // 피부색 기준: 앞머리·수염에 잘 안 가리는 양 볼과 콧등
+  u.uSkinA.value.set(posArr[50 * 3] / W, posArr[50 * 3 + 1] / H);
+  u.uSkinB.value.set(posArr[280 * 3] / W, posArr[280 * 3 + 1] / H);
+  u.uSkinC.value.set(posArr[6 * 3] / W, posArr[6 * 3 + 1] / H);
+  u.uLightH.value.copy(Lw).addScaledVector(up, -lv);   // 머리 기준 수평 성분. 정규화하지 않는다 (길이 = cos 고도)
+  u.uLightV.value = lv;                                // 머리 기준 위아래 성분
+  u.uCenter.value.copy(center); u.uUp.value.copy(up); u.uNose.value.copy(nose);
+  u.uChinScale.value = Math.max(1, nose.clone().sub(chin).dot(up));
+  u.uBrowH.value = Math.max(1, brow.clone().sub(chin).dot(up));
+  u.uTopH.value = Math.max(u.uBrowH.value + 1, top.clone().sub(chin).dot(up));
+  faceH = Math.hypot(top.x - chin.x, top.y - chin.y);
+
+  // 입술 한 덩어리 명암: 입 가운데에서 셰이더와 같은 식(FaceNdotL + 턱 휨)으로 밝음/그림자를 정한다.
+  // 명암선이 입을 지나갈 때 입술 전체가 툭 바뀌지 않도록 짧게(약 0.15초) 따라가게 한다
+  const m = new THREE.Vector3(); for (const i of LIP_LOOP) m.add(V(i)); m.multiplyScalar(1 / LIP_LOOP.length);
+  const nn = new THREE.Vector3(nrm[13 * 3] + nrm[14 * 3], nrm[13 * 3 + 1] + nrm[14 * 3 + 1], nrm[13 * 3 + 2] + nrm[14 * 3 + 2]).normalize();
+  nn.copy(slerpN(nn, m.clone().sub(center).normalize(), S.normal));   // 셰이더와 같은 구면 보간
+  const hM = m.clone().sub(nose).dot(up) + u.uChinScale.value, Lh = u.uLightH.value;
+  let stopM = S.stop;
+  if (S.tilt > 1e-4) stopM += S.tilt * Lh.length() * Math.exp(Math.min(-hM / Math.max(u.uChinScale.value * S.bend, 1e-4), 8));
+  const hv = nn.clone().addScaledVector(up, -nn.dot(up));
+  const ndl = hv.dot(Lh) / Math.max(hv.length(), 0.35) + nn.dot(up) * lv;
+  const kk = Math.min(1, Math.max(0, (ndl - stopM + S.soft) / Math.max(2 * S.soft, 1e-4))), target = kk * kk * (3 - 2 * kk);
+  const c = compMat.uniforms.uLipLit;
+  c.value = lipT === null ? target : c.value + (target - c.value) * (1 - Math.exp(-Math.max(0, t - lipT) / 0.05));
+  lipT = t;
+}
+let lipT = null;
+
+function applyUniforms() {
+  const u = shadeMat.uniforms, c = compMat.uniforms;
+  u.uStop.value = S.stop; u.uTilt.value = S.tilt; u.uBend.value = S.bend; u.uSoft.value = S.soft; u.uBlend.value = S.normal;
+  c.uToon.value = S.toon; c.uToonKeep.value = S.toonKeep; c.uToonBright.value = S.toonBright; c.uLevels.value = S.toonLevels;
+  c.uBgToon.value = S.bgToon; c.uBgLevels.value = S.bgLevels; c.uBgEdge.value = S.bgEdge;
+  u.uMirror.value = S.mirror ? 1 : 0; u.uExtOn.value = S.foreExt > 0 ? 1 : 0;
+  c.uMirror.value = S.mirror ? 1 : 0; c.uShadow.value = S.shadow; c.uThick.value = S.thick; c.uDark.value = S.dark; c.uInner.value = S.inner;
+  c.uShadeMode.value = S.skinColor ? 0 : 1; c.uSkinDark.value = S.skinDark; c.uSkinSat.value = S.skinSat; c.uSkinWarm.value = S.skinWarm;
+  { const h = parseInt(S.tint.slice(1), 16); c.uTint.value.set((h >> 16 & 255) / 255, (h >> 8 & 255) / 255, (h & 255) / 255); }   // 영상과 같은 sRGB 값 그대로
+  c.uDepthPx.value = S.depthPx; c.uNormLo.value = S.normLo; c.uShowShade.value = S.showShade ? 1 : 0; c.uShowLine.value = S.showLine ? 1 : 0; c.uDebug.value = S.debug ? 1 : 0;
+  drawLightPad();   // 패드의 미리보기 구는 명암선 위치·부드러움을 따라간다
+}
+
+// ---- 조절 패널
+const SLIDERS = [
+  ['빛 방향'],
+  [buildLightPad],
+  ['그림자 띠 (FBX2NPR 명암선 식)'],
+  ['normal', '노멀: 원본(0) ↔ 구면 정리(1)', 0, 1, 0.05],
+  ['stop', '명암선 위치', -0.8, 0.8, 0.01],
+  ['tilt', '턱으로 끌어당기는 세기', 0, 1.5, 0.01],
+  ['bend', '휘는 구간', 0.05, 1.5, 0.01],
+  ['soft', '경계 부드러움', 0, 0.25, 0.005],
+  ['shadow', '그림자 진하기', 0, 1, 0.01],
+  ['skinDark', '피부색 그림자: 밝기', 0.4, 1, 0.01],
+  ['skinSat', '피부색 그림자: 채도', 1, 1.8, 0.01],
+  ['skinWarm', '피부색 그림자: 붉은 기', 0, 1, 0.01],
+  ['depthK', '구 중심 깊이 (얼굴 폭 배수)', 0, 0.8, 0.01],
+  ['foreExt', '이마 연장 (머리선까지, 0 = 끔)', 0, 1.5, 0.05],
+  ['얼굴 전체 툰 (피부 평탄화)'],
+  ['toon', '툰 세기 (0 = 실사 위에 그림자·선만)', 0, 1, 0.01],
+  ['toonKeep', '원래 영상 음영 남기기 (0 = 완전히 평평)', 0, 0.6, 0.01],
+  ['toonBright', '툰 피부 밝기', 0.8, 1.4, 0.01],
+  ['toonLevels', '눈·눈썹·입 안 밝기 단계', 2, 8, 1],
+  ['화면 전체 툰 (얼굴 밖, 약하게)'],
+  ['bgToon', '세기 (0 = 실사 그대로)', 0, 1, 0.01],
+  ['bgLevels', '밝기 단계', 3, 10, 1],
+  ['bgEdge', '경계선 진하기', 0, 1, 0.01],
+  ['외곽선 (화면공간 Sobel)'],
+  ['thick', '두께 (px)', 0.5, 4, 0.1],
+  ['dark', '진하기 (낮을수록 진함)', 0, 1, 0.01],
+  ['inner', '안쪽 선 세기', 0, 2, 0.05],
+  ['depthPx', '가려짐 경계 기준 (px)', 1, 30, 0.5],
+  ['normLo', '안쪽 선 기준 (높을수록 적게)', 0.2, 3, 0.05],
+  ['eyeScale', '눈 외곽선 끄는 범위', 1, 2, 0.05],
+];
+const CHECKS = [['noEyeLine', '눈 외곽선 끄기'], ['skinColor', '그림자 색을 피부색 기반으로 (끄면 아래 지정 색)'], ['showShade', '그림자 띠 보기'], ['showLine', '외곽선 보기'], ['debug', '명암만 보기 (흑백)'], ['smooth', '손떨림 보정 (웹캠)'], ['mirror', '좌우 반전']];
+function buildPanel() {
+  const root = document.getElementById('controls');
+  // 프리셋: 번호 = 불러오기, '현재 값 저장' = 선택한 번호에 저장, '기본값' = 코드 기본값
+  const ph = document.createElement('h2'); ph.textContent = '프리셋';
+  const pr = document.createElement('div'); pr.className = 'preset';
+  pr.innerHTML = PRESET_SLOTS.map(n => `<button type="button" data-n="${n}">${n}</button>`).join('') +
+    `<button type="button" class="psave">현재 값 저장</button><button type="button" class="pdef">기본값</button>`;
+  const pmsg = document.createElement('p'); pmsg.className = 'desc';
+  root.append(ph, pr, pmsg);
+  const slotBtns = [...pr.querySelectorAll('[data-n]')];
+  const refresh = (msg) => {
+    slotBtns.forEach(b => { const n = +b.dataset.n; b.classList.toggle('on', n === presetSel); b.classList.toggle('empty', !presetData(n)); });
+    pmsg.textContent = msg || `번호를 누르면 불러오고, '현재 값 저장'은 선택한 ${presetSel}번에 저장합니다 (이 브라우저에 기억).`;
+  };
+  slotBtns.forEach(b => b.addEventListener('click', () => {
+    const n = +b.dataset.n; presetSel = n; store.set('arface.preset.last', String(n));
+    refresh(applyPreset(n) ? `${n}번 프리셋을 불러왔습니다.` : `${n}번은 비어 있습니다. 값을 맞춘 뒤 '현재 값 저장'을 누르면 ${n}번에 저장됩니다.`);
+  }));
+  pr.querySelector('.psave').addEventListener('click', () => refresh(store.set(`arface.preset.${presetSel}`, JSON.stringify(presetSnapshot()))
+    ? `${presetSel}번에 지금 값을 저장했습니다.` : '저장하지 못했습니다 (이 브라우저에서 저장소를 쓸 수 없음).'));
+  pr.querySelector('.pdef').addEventListener('click', () => { applyPreset(0); refresh('코드 기본값으로 되돌렸습니다 (저장된 프리셋은 그대로).'); });
+  refresh();
+  for (const s of SLIDERS) {
+    if (typeof s[0] === 'function') { s[0](root); continue; }
+    if (s.length === 1) { const h = document.createElement('h2'); h.textContent = s[0]; root.appendChild(h); continue; }
+    const [key, label, min, max, step] = s;
+    const row = document.createElement('div'); row.className = 'row';
+    row.innerHTML = `<label>${label}</label><span class="v"></span><input type="range" min="${min}" max="${max}" step="${step}" value="${S[key]}">`;
+    const inp = row.querySelector('input'), v = row.querySelector('.v');
+    const show = () => { v.textContent = (+S[key]).toFixed(step < 0.1 ? 2 : step < 1 ? 1 : 0); };
+    inp.addEventListener('input', () => { S[key] = +inp.value; show(); applyUniforms(); });
+    panelSync.push(() => { inp.value = S[key]; show(); });
+    show(); root.appendChild(row);
+  }
+  const h = document.createElement('h2'); h.textContent = '표시'; root.appendChild(h);
+  for (const [key, label] of CHECKS) {
+    const row = document.createElement('label'); row.className = 'chk';
+    row.innerHTML = `<input type="checkbox" ${S[key] ? 'checked' : ''}> ${label}`;
+    const box = row.querySelector('input');
+    box.addEventListener('change', (e) => { S[key] = e.target.checked; applyUniforms(); });
+    panelSync.push(() => { box.checked = !!S[key]; });
+    root.appendChild(row);
+  }
+  const colorRow = document.createElement('label'); colorRow.className = 'chk';
+  colorRow.innerHTML = `<input type="color" value="${S.tint}"> 지정 그림자 색 (곱하기)`;
+  const picker = colorRow.querySelector('input');
+  picker.addEventListener('input', () => { S.tint = picker.value; applyUniforms(); });
+  panelSync.push(() => { picker.value = S.tint; });
+  root.appendChild(colorRow);
+}
+const panelSync = [];
+function syncPanel() { for (const f of panelSync) f(); }
+
+// ---- 빛 방향 패드: 구 위의 점을 끌거나 눌러 빛을 옮긴다. 구는 얼굴과 같은 명암선 식(턱 휨 제외)으로 칠해 미리보기가 된다
+let drawLightPad = () => {}, lightStatus = () => {};
+function buildLightPad(root) {
+  const SIZE = 148, RAD = SIZE / 2 - 9;   // 가장자리에 놓인 점이 잘리지 않게 여백을 둔다
+  const box = document.createElement('div'); box.className = 'light';
+  box.innerHTML = `<canvas tabindex="0" role="slider" aria-label="빛 방향 패드 (끌기 · 방향키)"></canvas>
+    <div class="info">
+      <div class="read"><span>좌우</span><b></b><span>상하</span><b></b></div>
+      <div class="seg"><button type="button">앞</button><button type="button">뒤 (역광)</button></div>
+      <button type="button" class="reset">정면으로</button>
+    </div>`;
+  const mode = document.createElement('div'); mode.className = 'lmode';
+  mode.innerHTML = `<button type="button">자동 · 실제 조명</button><button type="button">수동 · 패드</button>`;
+  const [autoBtn, manualBtn] = mode.querySelectorAll('button');
+  const hint = document.createElement('p'); hint.className = 'desc';
+  root.append(mode, box, hint);
+  lightStatus = () => {
+    autoBtn.classList.toggle('on', S.lightAuto); manualBtn.classList.toggle('on', !S.lightAuto);
+    hint.textContent = S.lightAuto
+      ? `방의 실제 빛을 얼굴 밝기로 추정해 따라갑니다 (빛 방향 뚜렷함 ${Math.round(lightConf * 100)}% — 낮으면 고르게 퍼진 빛이라 정면광에 가깝게 둡니다). 점을 끌면 수동으로 바뀝니다.`
+      : '점을 끌거나 눌러 빛을 옮깁니다. 가운데 = 정면광, 가장자리 = 측면광, 위아래 = 높이.';
+  };
+  autoBtn.addEventListener('click', () => {   // 지금 패드의 빛에서 출발해 추정값으로 부드럽게 옮겨 간다
+    S.lightAuto = true; const l = lightDir(); lightEst.set(l.x, l.y, l.z); lightEstT = lastTick / 1000; drawLightPad();   // 프레임과 같은 시계로
+  });
+  manualBtn.addEventListener('click', () => { S.lightAuto = false; drawLightPad(); });
+  const cv = box.querySelector('canvas'), ctx = cv.getContext('2d');
+  const [hTxt, vTxt] = box.querySelectorAll('.read b');
+  const [frontBtn, backBtn] = box.querySelectorAll('.seg button');
+  const dpr = Math.min(2, window.devicePixelRatio || 1);
+  cv.width = cv.height = Math.round(SIZE * dpr);
+  const img = ctx.createImageData(cv.width, cv.height);
+  const LIT = [233, 228, 242], DARK = [93, 86, 112];
+  const deg = (r) => Math.round(r * 180 / Math.PI);
+
+  drawLightPad = () => {
+    const ld = lightDir(), c = cv.width / 2, R = RAD * dpr, d = img.data;
+    const ss = (e0, e1, v) => { const k = Math.min(1, Math.max(0, (v - e0) / Math.max(e1 - e0, 1e-4))); return k * k * (3 - 2 * k); };
+    for (let py = 0; py < cv.height; py++) for (let px = 0; px < cv.width; px++) {
+      const nx = (px + 0.5 - c) / R, ny = (c - py - 0.5) / R, rr = nx * nx + ny * ny, o = (py * cv.width + px) * 4;
+      const a = Math.min(1, Math.max(0, (1 - Math.sqrt(rr)) * R + 0.5));   // 테두리 안티에일리어싱
+      if (a <= 0) { d[o + 3] = 0; continue; }
+      const nz = Math.sqrt(Math.max(0, 1 - rr));
+      const t = (nx * ld.x + nz * ld.z) / Math.max(Math.hypot(nx, nz), 0.35) + ny * ld.y;   // 셰이더 FaceNdotL 과 같은 식
+      const lit = ss(S.stop - S.soft, S.stop + S.soft, t);
+      for (let ch = 0; ch < 3; ch++) d[o + ch] = DARK[ch] + (LIT[ch] - DARK[ch]) * lit;
+      d[o + 3] = a * 255;
+    }
+    ctx.putImageData(img, 0, 0);
+    ctx.save(); ctx.scale(dpr, dpr);
+    const C = SIZE / 2, hx = C + S.lightX * RAD, hy = C - S.lightY * RAD;   // 점은 패드 좌표 그대로 (빛 벡터 성분이 아니라)
+    ctx.lineWidth = 1; ctx.strokeStyle = 'rgba(22,22,26,0.2)';
+    ctx.beginPath(); ctx.moveTo(C - RAD, C); ctx.lineTo(C + RAD, C); ctx.moveTo(C, C - RAD); ctx.lineTo(C, C + RAD); ctx.stroke();   // 십자 기준선
+    ctx.strokeStyle = 'rgba(255,255,255,0.22)'; ctx.beginPath(); ctx.arc(C, C, RAD, 0, Math.PI * 2); ctx.stroke();
+    ctx.lineWidth = 1.5; ctx.strokeStyle = 'rgba(22,22,26,0.5)'; ctx.beginPath(); ctx.moveTo(C, C); ctx.lineTo(hx, hy); ctx.stroke();
+    ctx.beginPath(); ctx.arc(hx, hy, 7, 0, Math.PI * 2);
+    if (S.lightBack) {   // 뒤에서 비추면 속이 빈 점선 고리
+      ctx.lineWidth = 4.5; ctx.strokeStyle = '#16161a'; ctx.stroke();
+      ctx.setLineDash([3, 2.5]); ctx.lineWidth = 2.5; ctx.strokeStyle = '#ffc94d'; ctx.stroke();
+    } else {
+      ctx.fillStyle = '#ffc94d'; ctx.fill(); ctx.lineWidth = 2; ctx.strokeStyle = '#16161a'; ctx.stroke();
+    }
+    ctx.restore();
+    const h = deg(Math.atan2(ld.x, ld.z)), v = deg(Math.asin(Math.max(-1, Math.min(1, ld.y))));
+    hTxt.textContent = Math.abs(v) >= 89 ? '—' : h === 0 ? '정면' : Math.abs(h) === 180 ? '바로 뒤' : `${h < 0 ? '왼쪽' : '오른쪽'} ${Math.abs(h)}°`;
+    vTxt.textContent = v === 0 ? '수평' : `${v > 0 ? '위' : '아래'} ${Math.abs(v)}°`;
+    frontBtn.classList.toggle('on', !S.lightBack); backBtn.classList.toggle('on', S.lightBack);
+    cv.setAttribute('aria-valuetext', `좌우 ${hTxt.textContent}, 상하 ${vTxt.textContent}, ${S.lightBack ? '뒤' : '앞'}`);
+    lightStatus();
+  };
+
+  const setLight = (x, y) => {   // 사용자가 패드를 만지면 수동으로 바뀐다
+    const r = Math.hypot(x, y); if (r > 1) { x /= r; y /= r; }   // 원 밖으로 끌면 가장자리(측면광)에 붙인다
+    S.lightAuto = false; S.lightX = x; S.lightY = y; drawLightPad();
+  };
+  const toFront = () => { S.lightBack = false; setLight(0, 0); };
+  const fromPointer = (e) => {
+    const b = cv.getBoundingClientRect(), s = b.width / SIZE;
+    setLight((e.clientX - b.left - b.width / 2) / (RAD * s), -(e.clientY - b.top - b.height / 2) / (RAD * s));
+  };
+  cv.addEventListener('pointerdown', (e) => { cv.setPointerCapture(e.pointerId); fromPointer(e); });
+  cv.addEventListener('pointermove', (e) => { if (cv.hasPointerCapture(e.pointerId)) fromPointer(e); });
+  cv.addEventListener('keydown', (e) => {
+    const st = e.shiftKey ? 0.01 : 0.05;
+    const mv = { ArrowLeft: [-st, 0], ArrowRight: [st, 0], ArrowUp: [0, st], ArrowDown: [0, -st] }[e.key];
+    if (mv) setLight(S.lightX + mv[0], S.lightY + mv[1]);
+    else if (e.key === 'Home') toFront();
+    else return;
+    e.preventDefault();
+  });
+  frontBtn.addEventListener('click', () => { S.lightAuto = false; S.lightBack = false; drawLightPad(); });
+  backBtn.addEventListener('click', () => { S.lightAuto = false; S.lightBack = true; drawLightPad(); });
+  box.querySelector('.reset').addEventListener('click', toFront);
+  panelSync.push(() => drawLightPad());
+}
+
+// ---- 반복
+let lms = null, lastVT = -1, lastImageDetect = -1, frames = 0, fps = 0, fpsT = performance.now();
+function render() {
+  renderer.setClearColor(0x000000, 0);
+  renderer.setRenderTarget(rtShade); renderer.clear();
+  if (lms) { mesh.material = shadeMat; renderer.render(faceScene, cam); }
+  renderer.setRenderTarget(rtNorm); renderer.clear();
+  if (lms) { mesh.material = normMat; renderer.render(faceScene, cam); }
+  renderer.setRenderTarget(rtEye); renderer.clear();
+  if (lms) { eyeMesh.visible = S.noEyeLine; renderer.render(eyeScene, cam); }   // 입술 마스크는 툰 세기와 상관없이 (입술 한 덩어리 명암에도 쓴다)
+  renderer.setRenderTarget(null); renderer.render(compScene, compCam);
+}
+// 성능 재기 (콘솔: __demo.bench()). 얼굴 갱신(CPU)과 렌더 4패스를 n 번 연속으로 돌린 뒤 픽셀 하나를 읽어
+// GPU 가 다 끝날 때까지 기다리므로, 한 프레임에 드는 실제 시간(ms)이 나온다. 얼굴 추적(MediaPipe) 시간은 빠진다
+function bench(n = 120) {
+  if (!lms) return null;
+  const gl = renderer.getContext(), px = new Uint8Array(4), sync = () => gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px);
+  render(); sync();
+  let t0 = performance.now();
+  for (let i = 0; i < n; i++) updateFace(lms, t0 / 1000);
+  const face = (performance.now() - t0) / n;
+  t0 = performance.now();
+  for (let i = 0; i < n; i++) estimateLight(t0 / 1000, true);   // 같은 시각이라 추정값은 움직이지 않고 비용만 잰다
+  const light = (performance.now() - t0) / n;
+  t0 = performance.now();
+  for (let i = 0; i < n; i++) render();
+  sync();
+  return { face: +face.toFixed(3), light: +light.toFixed(3), render: +((performance.now() - t0) / n).toFixed(3), size: `${W}x${H}` };
+}
+let stepT = 0, lastTick = 0;   // __demo.step() 이 쓰는 가상 시각, 마지막 프레임 시각 (ms)
+function loop(now) {
+  requestAnimationFrame(loop);
+  tick(now);
+}
+function tick(now) {   // 한 프레임 (콘솔 __demo.step() 으로도 돌릴 수 있다 — 탭이 숨겨져 rAF 가 멈췄을 때 시험용)
+  lastTick = now;
+  if (video && video.readyState >= 2 && video.currentTime !== lastVT) {
+    lastVT = video.currentTime;
+    const r = landmarker.detectForVideo(video, now);
+    lms = r.faceLandmarks && r.faceLandmarks.length ? r.faceLandmarks[0] : null;
+  } else if (image && lastImageDetect !== 1) {
+    const r = landmarker.detect(image);
+    lms = r.faceLandmarks && r.faceLandmarks.length ? r.faceLandmarks[0] : null; lastImageDetect = 1;
+  }
+  if (lms) { updateFace(lms, now / 1000); if (S.lightAuto) estimateLight(now / 1000); }
+  render();
+  frames++;
+  if (now - fpsT > 1000) {
+    fps = frames * 1000 / (now - fpsT); frames = 0; fpsT = now;
+    say(`${SRC === 'cam' ? '웹캠' : '시험 그림'} ${W}×${H} · ${fps.toFixed(0)} fps · ${lms ? '얼굴 추적 중' : '얼굴을 찾지 못함'} · 메시 삼각형 ${tris.length / 3}개(가짜 면 ${triInfo.removed}개 제외, 감김 ${triInfo.flipped}개 맞춤) · 얼굴 높이 ${faceH.toFixed(0)}px`);
+  }
+}
+
+(async () => {
+  try {
+    say('영상 여는 중…'); await openSource();
+    say('얼굴 추적 모델 불러오는 중…'); await openLandmarker();
+    initGL(); buildPanel(); applyUniforms();
+    applyPreset(presetSel);   // 마지막으로 쓴 프리셋으로 시작 (처음이면 1번)
+    window.__demo = { S, applyUniforms, triInfo, setS: (o) => { Object.assign(S, o); applyUniforms(); syncPanel(); }, bench, step: (ms = 1000 / 60) => { stepT = Math.max(stepT + ms, performance.now()); tick(stepT); },
+      light: () => ({ dir: lightEst.toArray().map(v => +v.toFixed(3)), conf: +lightConf.toFixed(2), pad: [S.lightX, S.lightY].map(v => +v.toFixed(3)), back: S.lightBack }) };   // 콘솔에서 값을 바꿔 보기 위한 손잡이
+    requestAnimationFrame(loop);
+  } catch (e) { console.error(e); if (!statusEl.textContent.startsWith('웹캠')) say('시작하지 못했습니다: ' + (e.message || e)); }
+})();
+</script>
+</body>
+</html>
