@@ -37,6 +37,11 @@ Shader "FBX2NPR/SobelOutline"
 
             float _Darkness, _Thickness, _DepthScale, _NormalScale, _Threshold, _Debug;
 
+            // 외곽선 피처가 얼굴 렌더러를 원본 노멀로 다시 그린 텍스처 (xyz 노멀, w 카메라까지 거리, 없는 곳은 0).
+            // 재질 셰이더가 노멀 버퍼에 정리된 노멀을 써도(UTS 등) 코·입 선이 살아 있게 합니다.
+            TEXTURE2D_X(_FBX2NPRLineNormals);
+            float _LineNormalsOn;
+
             // 3x3 소벨 커널의 가로/세로 가중치
             static const float2 kOff[8] = {
                 float2(-1,-1), float2(0,-1), float2(1,-1),
@@ -50,13 +55,25 @@ Shader "FBX2NPR/SobelOutline"
                 return LinearEyeDepth(SampleSceneDepth(uv), _ZBufferParams);
             }
 
+            // 장면 노멀. 원본 노멀로 다시 그린 얼굴이 같은 깊이에 있으면 그 노멀을 씁니다 (앞에 다른 물체가 가리면 장면 노멀 그대로).
+            float3 Normals(float2 uv, float eyeDepth)
+            {
+                float3 n = SampleSceneNormals(uv);
+                if (_LineNormalsOn > 0.5)
+                {
+                    float4 ln = SAMPLE_TEXTURE2D_X(_FBX2NPRLineNormals, sampler_PointClamp, uv);
+                    if (ln.w > 0.0 && abs(ln.w - eyeDepth) < 1e-3 * eyeDepth + 1e-4) n = ln.xyz;
+                }
+                return n;
+            }
+
             half4 frag (Varyings i) : SV_Target
             {
                 float2 uv = i.texcoord;
                 float2 texel = (1.0 / _ScreenParams.xy) * _Thickness;
 
                 float dC = EyeDepth(uv);
-                float3 nC = SampleSceneNormals(uv);
+                float3 nC = Normals(uv, dC);
 
                 float dgx = 0, dgy = 0;
                 float3 ngx = 0, ngy = 0;
@@ -65,7 +82,7 @@ Shader "FBX2NPR/SobelOutline"
                 {
                     float2 o = uv + kOff[k] * texel;
                     float d = EyeDepth(o);
-                    float3 n = SampleSceneNormals(o);
+                    float3 n = Normals(o, d);
                     dgx += d * kGx[k];  dgy += d * kGy[k];
                     ngx += n * kGx[k];  ngy += n * kGy[k];
                 }

@@ -28,7 +28,7 @@ Shader "NormalTest/ToonBand"
         // 빛 쪽 윤곽선 안쪽을 살짝 밝게 (림라이트). 그림자 띠와 같은 구조, 방향만 반대.
         _RimLight    ("빛 쪽 가장자리 밝기 (0이면 끔)", Range(0,1)) = 0
         _RimWidth    ("빛 쪽 가장자리 폭 임계값", Float) = 0.92
-        // 빛을 잘 받는 곳은 원본 노멀(코·뺨의 형태감), 어두워지는 곳은 정리된 노멀(얼룩 제거). UV3 에 심은 원본 노멀을 쓴다.
+        // 빛을 잘 받는 곳은 원본 노멀(코·뺨의 형태감), 어두워지는 곳은 정리된 노멀(얼룩 제거). UV3(스킨 메시는 UV4)에 심은 원본 노멀을 쓴다.
         _OrigBlend   ("빛 쪽은 원본 노멀 유지 (0이면 끔)", Range(0,1)) = 0
         _OrigLo      ("원본 유지 하한 (이 ndotl 아래는 정리된 노멀)", Float) = 0.25
         _OrigHi      ("원본 유지 상한 (이 ndotl 위는 원본 노멀)", Float) = 0.55
@@ -92,9 +92,9 @@ Shader "NormalTest/ToonBand"
         [Toggle] _ShowNormal ("최종 노멀을 색으로", Float) = 0
         [Toggle] _UseOrigNormal ("선 검출에 원본 노멀 사용 (UV3)", Float) = 1
         // 스킨 메시용. UV3 에 실은 원본 노멀은 뼈를 따라 돌지 않습니다(스키닝은 위치·노멀·탄젠트만 변형합니다).
-        // 고개를 돌리면 코 음영과 외곽선이 어긋나므로, 변환 도구는 원본 노멀을 탄젠트 자리에 실어 둡니다.
-        // 켜면 원본 노멀을 UV3 대신 탄젠트에서 읽습니다. 이때 노멀맵은 쓸 수 없습니다(_NormalStrength 0).
-        [Toggle] _OrigFromTangent ("원본 노멀을 탄젠트에서 읽기 (스킨 메시)", Float) = 0
+        // 고개를 돌리면 코 음영과 외곽선이 어긋나므로, 변환 도구는 원본 노멀을 노멀·탄젠트 기준 방향(탄젠트 공간)으로 UV4 에 실어 둡니다.
+        // 켜면 원본 노멀을 UV3 대신 UV4 에서 읽어 지금의 노멀·탄젠트로 되돌립니다. 탄젠트는 진짜 탄젠트라 노멀맵도 쓸 수 있습니다.
+        [Toggle] _OrigTangentSpace ("원본 노멀을 UV4(탄젠트 공간)에서 읽기 (스킨 메시)", Float) = 0
         // 얼굴과 몸이 한 메시·한 재질인 캐릭터용 (믹사모: 머리·목·손이 한 메시). 켜면 얼굴 명암선·가장자리 띠·림을
         // 정점의 얼굴 가중치(UV2.x, 변환 도구가 넣음)만큼만 적용하고, 나머지는 일반 밴드 명암으로 둡니다.
         [Toggle] _FaceWeightOn ("얼굴 명암을 얼굴 가중치(UV2.x)만큼만", Float) = 0
@@ -132,6 +132,7 @@ Shader "NormalTest/ToonBand"
 
             // Core.hlsl 은 Color.hlsl 을 끌고 오지 않습니다. LinearToSRGB 를 쓰려면 직접 넣어야 합니다.
             #include "Packages/com.unity.render-pipelines.core/ShaderLibrary/Color.hlsl"
+            #include "OriginalNormals.hlsl"
 
             TEXTURE2D(_NormalMap);
             SAMPLER(sampler_NormalMap);
@@ -205,7 +206,7 @@ Shader "NormalTest/ToonBand"
                 float  _FlattenMip;
                 float  _Cutout;
                 float  _Cutoff;
-                float  _OrigFromTangent;
+                float  _OrigTangentSpace;
                 float  _FaceWeightOn;
                 float  _EmissionOn;
                 float4 _EmissionColor;
@@ -219,6 +220,7 @@ Shader "NormalTest/ToonBand"
                 float2 uv         : TEXCOORD0;
                 float2 faceW      : TEXCOORD2;   // x = 얼굴 가중치 (변환 도구가 넣음, 없으면 0)
                 float3 origOS     : TEXCOORD3;   // 임포트 때 심어 둔 원본 노멀
+                float3 origTS     : TEXCOORD4;   // 변환 도구가 탄젠트 공간으로 실어 둔 원본 노멀 (_OrigTangentSpace)
             };
 
             struct Varyings
@@ -295,7 +297,9 @@ Shader "NormalTest/ToonBand"
                 Varyings o;
                 o.positionCS = TransformObjectToHClip(v.positionOS.xyz);
                 o.positionWS = TransformObjectToWorld(v.positionOS.xyz);
-                o.origWS     = TransformObjectToWorldNormal(_OrigFromTangent > 0.5 ? v.tangentOS.xyz : v.origOS);
+                // UV4 가 비어 있으면(예전 메시) UV3 을 씁니다.
+                float3 origOS = (_OrigTangentSpace > 0.5 && dot(v.origTS, v.origTS) > 0.25) ? DecodeOriginalNormal(v.origTS, v.normalOS, v.tangentOS) : v.origOS;
+                o.origWS     = TransformObjectToWorldNormal(origOS);
                 o.normalWS   = TransformObjectToWorldNormal(v.normalOS);
                 float3 tWS   = TransformObjectToWorldDir(v.tangentOS.xyz);
                 // 음수 스케일이 걸린 오브젝트에서 bitangent 가 뒤집히는 것을 보정합니다.
@@ -311,8 +315,7 @@ Shader "NormalTest/ToonBand"
 
                 float3 n = normalize(i.normalWS);
 
-                // _OrigFromTangent 일 때는 탄젠트 자리에 원본 노멀이 들어 있어 TBN 을 만들 수 없습니다 (노멀맵 꺼짐).
-                if (_NormalStrength > 0.0001 && _OrigFromTangent < 0.5)
+                if (_NormalStrength > 0.0001)
                 {
                     // URP LitForwardPass 와 같은 구성입니다.
                     // 보간값을 정규화하지도, 탄젠트를 노멀에 재직교화하지도 않습니다.
@@ -619,7 +622,8 @@ Shader "NormalTest/ToonBand"
         //
         // 여기서 일부러 '원본' 노멀을 내보냅니다. 화면에 칠할 때는 평탄화한 노멀을 쓰고,
         // 선을 찾을 때는 원본을 쓰는 겁니다. 그러면 평탄화로 지워진 형태가
-        // 정확히 그 자리에 선으로 돌아옵니다. 원본 노멀은 임포트 때 UV3 에 실어 둡니다.
+        // 정확히 그 자리에 선으로 돌아옵니다. 원본 노멀은 UV3(물체 공간) 또는 UV4(탄젠트 공간, 스킨 메시)에 실어 둡니다.
+        // 외곽선용 노멀을 만드는 식은 LineNormal.hlsl 에 있고, 외곽선 피처의 원본 노멀 패스(LineNormals.shader)도 같은 식을 씁니다.
         Pass
         {
             Name "DepthNormals"
@@ -649,17 +653,21 @@ Shader "NormalTest/ToonBand"
                 float  _OutlineFlatNormal;
                 float  _Cutout;
                 float  _Cutoff;
-                float  _OrigFromTangent;
+                float  _OrigTangentSpace;
                 float4 _InnerLineFade;
                 float  _FaceWeightOn;
             CBUFFER_END
+
+            #include "OriginalNormals.hlsl"
+            #include "LineNormal.hlsl"
 
             struct dnAttributes
             {
                 float4 positionOS : POSITION;
                 float3 normalOS   : NORMAL;
-                float4 tangentOS  : TANGENT;     // _OrigFromTangent 일 때 원본 노멀이 여기 들어 있다 (스킨 메시)
+                float4 tangentOS  : TANGENT;     // UV4 의 원본 노멀을 되돌릴 축 (스킨 메시)
                 float3 origOS     : TEXCOORD3;   // 임포트 때 심어 둔 원본 노멀
+                float3 origTS     : TEXCOORD4;   // 탄젠트 공간 원본 노멀 (_OrigTangentSpace)
                 float2 uv         : TEXCOORD0;
                 float2 faceW      : TEXCOORD2;   // x = 얼굴 가중치, y = 피부 메시 전체 1 (안쪽 선 지우기용). 변환 도구가 넣음, 없으면 0
             };
@@ -676,38 +684,12 @@ Shader "NormalTest/ToonBand"
                 dnVaryings o;
                 o.positionCS = TransformObjectToHClip(v.positionOS.xyz);
                 o.uv = v.uv;
-                float3 orig = (_OrigFromTangent > 0.5) ? v.tangentOS.xyz : v.origOS;
+                // UV4 가 비어 있으면(예전 메시) UV3 을 씁니다.
+                float3 orig = (_OrigTangentSpace > 0.5 && dot(v.origTS, v.origTS) > 0.25) ? DecodeOriginalNormal(v.origTS, v.normalOS, v.tangentOS) : v.origOS;
                 float3 src = (_UseOrigNormal > 0.5) ? orig : v.normalOS;
                 // UV3 가 비어 있으면 (0,0,0) 이므로 그때는 메시 노멀로 되돌립니다.
                 if (dot(src, src) < 1e-8) src = v.normalOS;
-                if (_OutlineFlatNormal > 0.5)
-                {
-                    // 정점마다 카메라를 향하는 벡터. 메시 안에서 매끄럽게 변하므로 소벨이 잡을 노멀 엣지가 없습니다.
-                    float3 pw = TransformObjectToWorld(v.positionOS.xyz);
-                    o.normalWS = normalize(_WorldSpaceCameraPos - pw);
-                    return o;
-                }
-                o.normalWS = TransformObjectToWorldNormal(src);
-                if (_InnerLineFade.y > 1e-7)
-                {
-                    float3 pw = TransformObjectToWorld(v.positionOS.xyz);
-                    float  dv = abs(TransformWorldToView(pw).z);
-                    // 픽셀 하나가 덮는 실제 크기 (미터). 원근: 2 d / (P11 x 화면 높이), 직교: 2 x 반높이 / 화면 높이
-                    float  fp = (unity_OrthoParams.w > 0.5) ? (2.0 * unity_OrthoParams.y / _ScreenParams.y)
-                                                            : (2.0 * dv / (abs(UNITY_MATRIX_P[1][1]) * _ScreenParams.y));
-                    float  t  = (_InnerLineFade.y > _InnerLineFade.x) ? smoothstep(_InnerLineFade.x, _InnerLineFade.y, fp) : step(_InnerLineFade.y, fp);
-                    // 얼굴 재질을 받는 피부 메시만 지운다(리그가 _InnerLineFade 를 얼굴 재질 칸에만 넣으므로 옷 메시는 이 블록에 오지 않는다).
-                    // 얼굴(x)은 원래 거리에서, 나머지 피부(y: 목·손·발목 등)는 얼굴의 두 배 거리에서부터 지운다 — 얼굴만 지우면 게임 거리에서
-                    // 작게 보이는 피부가 선 색 덩어리로 남았고(Ch07 툰, 2026-10-14), 같은 거리로 지우면 클로즈업에서 턱선(얼굴과 목의 노멀 차)이 흐려졌다.
-                    // y 가 없는 예전 메시는 0 이라 x 만 쓴 것과 같고, 얼굴 정점(x=y=1)은 두 배 거리의 비중이 늘 더 작아 예전과 같다.
-                    if (_FaceWeightOn > 0.5)
-                    {
-                        float2 fn = _InnerLineFade.xy * 2.0;
-                        float  tn = (fn.y > fn.x) ? smoothstep(fn.x, fn.y, fp) : step(fn.y, fp);
-                        t = max(t * saturate(v.faceW.x), tn * saturate(v.faceW.y));
-                    }
-                    o.normalWS = normalize(lerp(o.normalWS, normalize(_WorldSpaceCameraPos - pw), t));
-                }
+                o.normalWS = LineNormalWS(v.positionOS.xyz, src, v.faceW);
                 return o;
             }
 

@@ -19,8 +19,9 @@ namespace FBX2NPR.EditorTools
     ///   3) 얼굴 재질(명암선·코 음영·림)과 옷·머리카락 재질(일반 툰 밴드, 실루엣 선) 생성과 할당
     /// 결과는 뼈대와 스킨이 그대로인 프리팹이라 애니메이션이 된다. 원본 FBX 와 텍스처는 건드리지 않는다.
     ///
-    /// 스킨 메시에서 원본 노멀은 탄젠트 자리에 싣는다. UV3 에 실으면 뼈를 따라 돌지 않아 고개를 돌릴 때
-    /// 코 음영과 외곽선이 어긋난다 (ToonBand 의 _OrigFromTangent).
+    /// 스킨 메시의 원본 노멀은 UV4 에 탄젠트 공간으로 싣는다 (OriginalNormals, ToonBand 의 _OrigTangentSpace). UV3(물체 공간)만으로는 뼈를 따라 돌지 않아
+    /// 고개를 돌릴 때 코 음영과 외곽선이 어긋나고, 예전처럼 탄젠트 자리에 실으면 노멀맵과 다른 셰이더가 쓸 탄젠트를 잃는다.
+    /// 얼굴 렌더러에는 렌더링 레이어 OriginalNormals.LineLayer 를 켠다. 외곽선 피처가 재질 셰이더와 상관없이 원본 노멀로 안쪽 선을 그린다.
     /// 얼굴 기준점(코끝·눈·얼굴 중심)은 머리 본 아래에 표식으로 두어 머리와 같이 움직이게 한다.
     /// 빛은 씬의 디렉셔널 라이트를 따른다 (ToonFaceRig.LightDirection).
     ///
@@ -37,6 +38,7 @@ namespace FBX2NPR.EditorTools
         /// <summary>제품 셰이더 폴더. 재질·렌더러 피처가 셰이더를 경로로 불러오는 곳은 모두 여기를 쓴다.</summary>
         public const string ShaderDir = "Assets/FBX2NPR/Product/Shaders";
         const string OutlineShaderPath = ShaderDir + "/SobelOutline.shader";
+        const string LineNormalsShaderPath = ShaderDir + "/LineNormals.shader";
         // 미리보기 생성기와 같은 코 도형 기본값 (62번: 두꺼운 초승달)
         const float MoonStretchDefault = 1.6f, MoonBulgeDefault = -0.35f, MoonThicknessDefault = 0.75f, MoonWidthDefault = 1.5f;
         const float DropRadiusDefault = 0.13f, DropHeightDefault = 0.37f;
@@ -167,14 +169,12 @@ namespace FBX2NPR.EditorTools
                 bool lashDrawn = false;   // 어느 텍스처에서든 눈매 먹선(아이라인)을 그렸는가 → 속눈썹 카드 메시를 숨길지
                 if (parts.Count == 0) { rep.lines.Add("렌더러 없음"); return rep; }
 
-                // ---- 1) 노멀: 원본은 UV3 와 탄젠트에, 조명용은 방사형(얼굴 전체에서 한 번 구한 중심)
+                // ---- 1) 노멀: 원본은 UV3(물체 공간)와 UV4(탄젠트 공간, 뼈를 따라 돈다)에, 조명용은 방사형(얼굴 전체에서 한 번 구한 중심)
                 bool blendWarned = false;
                 foreach (var p in parts)
                 {
                     p.mesh.SetUVs(3, new List<Vector3>(p.origN));
-                    var tan = new Vector4[p.origN.Length];
-                    for (int i = 0; i < tan.Length; i++) { var n = p.origN[i]; tan[i] = new Vector4(n.x, n.y, n.z, 1f); }
-                    p.mesh.tangents = tan;
+                    if (p.mesh.HasVertexAttribute(UnityEngine.Rendering.VertexAttribute.TexCoord4)) rep.lines.Add("UV4 를 원본 노멀로 덮어씀 (원래 들어 있던 값은 버림): " + p.name);
                     // 얼굴 가중치는 UV2.x 에. 얼굴과 몸이 한 메시일 때 셰이더가 얼굴 명암을 얼굴에만 적용한다 (_FaceWeightOn).
                     // UV2.y 는 피부 메시 전체: 게임 거리에서 안쪽 선을 지우는 범위 (얼굴만 지우면 목·손·발목이 선 색 덩어리로 남는다, Ch07 툰. LineFadeWeights)
                     var fw = new List<Vector2>(p.weights.Length);
@@ -183,7 +183,7 @@ namespace FBX2NPR.EditorTools
                     if (p.mesh.blendShapeCount > 0 && !blendWarned)
                     {
                         blendWarned = true;
-                        rep.lines.Add("주의: 블렌드셰이프(표정)가 있는 메시가 있습니다 (" + p.name + " 등). 표정을 움직일 때의 노멀은 시험하지 않았습니다: 탄젠트 자리의 원본 노멀에 탄젠트용 변화량이 더해져 코 음영·얼굴 안쪽 선이 틀어질 수 있습니다.");
+                        rep.lines.Add("주의: 블렌드셰이프(표정)가 있는 메시가 있습니다 (" + p.name + " 등). 표정을 움직일 때의 노멀은 시험하지 않았습니다: 표정의 노멀·탄젠트 변화량이 원본 노멀을 되돌리는 축도 함께 움직여 코 음영·얼굴 안쪽 선이 조금 틀어질 수 있습니다.");
                     }
                 }
                 var targets = new List<FaceMeshRule.Target>();
@@ -195,8 +195,11 @@ namespace FBX2NPR.EditorTools
                     var p = parts[k];
                     if (p.headCount == 0) continue;
                     p.mesh.normals = FaceMeshRule.Apply(targets[k], centerW, 1f);
+                    p.mesh.RecalculateTangents();   // 정리한 노멀에 맞는 탄젠트. 노멀맵과 원본 노멀 복원이 같은 축을 쓴다
                     cleaned += p.headCount;
                 }
+                // 원본 노멀을 지금 노멀·탄젠트 기준(탄젠트 공간)으로 UV4 에 싣는다. 스키닝이 노멀·탄젠트를 돌리면 함께 돈다 (OriginalNormals).
+                foreach (var p in parts) OriginalNormals.Write(p.mesh, p.origN);
 
                 // ---- 기준점과 바운드
                 var srcs = new List<FaceLandmarks.Src>();
@@ -417,6 +420,8 @@ namespace FBX2NPR.EditorTools
                     }
                     if (p.smr != null) p.smr.sharedMesh = p.mesh; else p.mf.sharedMesh = p.mesh;
                     p.rend.sharedMaterials = mats;
+                    // 외곽선 피처가 원본 노멀로 다시 그릴 렌더러. 이미 평평하게 칠한 얼굴은 실루엣 선만 쓰므로(위 handPainted) 켜지 않는다.
+                    if (faceRend && !rep.handPainted) p.rend.renderingLayerMask |= OriginalNormals.LineLayer;
                     (faceRend ? faceRends : otherRends).Add(p.rend);
                 }
                 rep.lines.Add(string.Format("메시 {0}개, 재질 {1}개 (얼굴 렌더러 {2}, 그 밖 {3}), 텍스처 평탄화 {4}개", parts.Count, matN, faceRends.Count, otherRends.Count, baked));
@@ -516,7 +521,7 @@ namespace FBX2NPR.EditorTools
             return rep;
         }
 
-        // ---------- 재질 (미리보기 생성기 SetupMat 과 같은 값 + 탄젠트의 원본 노멀) ----------
+        // ---------- 재질 (미리보기 생성기 SetupMat 과 같은 값 + UV4 의 원본 노멀) ----------
         static void SetupMat(Material mat, bool isFace, Texture albedo, bool silFace, Vector3 faceCenter, Material src, List<string> notes)
         {
             mat.SetVector("_Band0", new Vector4(0.32f, 0.30f, 0.42f, 1f));
@@ -524,7 +529,7 @@ namespace FBX2NPR.EditorTools
             mat.SetVector("_Band2", new Vector4(1.00f, 0.96f, 0.92f, 1f));
             mat.SetFloat("_Stop1", 0.0f); mat.SetFloat("_Stop2", 0.35f);   // 얼굴이 아닌 메시는 2톤 밴드. 경계는 리그의 bodyShadow 기본값과 같게 (리그가 꺼져 있어도 같은 모습)
             mat.SetFloat("_UseOrigNormal", 1f); mat.SetFloat("_NormalStrength", 0f);
-            mat.SetFloat("_OrigFromTangent", 1f);                          // 스킨 메시: 원본 노멀이 뼈를 따라가도록
+            mat.SetFloat("_OrigTangentSpace", 1f);                         // 스킨 메시: 원본 노멀을 UV4(탄젠트 공간)에서 읽어 뼈를 따라가도록
             mat.SetFloat("_OutlineFlatNormal", (silFace || !isFace) ? 1f : 0f);
             if (albedo != null) mat.SetTexture("_Albedo", albedo);
             mat.SetFloat("_AlbedoOn", albedo != null ? 1f : 0f);
@@ -881,6 +886,7 @@ namespace FBX2NPR.EditorTools
                 var s = f as SobelOutlineFeature; if (s == null) continue;
                 // 빌드 안전: 셰이더 에셋 참조가 비어 있으면 넣는다. 아무도 참조하지 않는 셰이더는 빌드에서 빠져 플레이어의 Shader.Find 가 null 이 된다 (기록 91번). 저장은 호출한 쪽의 SaveAssets 가 한다.
                 if (s.shader == null) { var sh = AssetDatabase.LoadAssetAtPath<Shader>(OutlineShaderPath); if (sh != null) { s.shader = sh; EditorUtility.SetDirty(s); } }
+                if (s.lineNormalsShader == null) { var sh = AssetDatabase.LoadAssetAtPath<Shader>(LineNormalsShaderPath); if (sh != null) { s.lineNormalsShader = sh; EditorUtility.SetDirty(s); } }
                 return s;
             }
             return null;

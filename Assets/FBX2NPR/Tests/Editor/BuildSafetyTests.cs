@@ -25,6 +25,8 @@ namespace FBX2NPR.Tests
                     if (sobel == null) continue;
                     found++;
                     Assert.That(sobel.shader, Is.Not.Null, path + ": 외곽선 셰이더 참조가 비어 있으면 빌드에서 셰이더가 빠집니다.");
+                    if (sobel.settings.restoreOriginalNormals)
+                        Assert.That(sobel.lineNormalsShader, Is.Not.Null, path + ": 원본 노멀 패스 셰이더 참조가 비어 있으면 빌드에서 셰이더가 빠집니다.");
                 }
             }
             if (found == 0) Assert.Ignore("외곽선 피처를 쓰는 렌더러가 없습니다.");

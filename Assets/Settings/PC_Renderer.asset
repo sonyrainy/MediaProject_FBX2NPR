@@ -21,7 +21,9 @@ MonoBehaviour:
     threshold: 0.12
     injectionPoint: 500
     debug: 0
+    restoreOriginalNormals: 1
   shader: {fileID: 4800000, guid: af2ec58fb834575408df1684f7616e66, type: 3}
+  lineNormalsShader: {fileID: 4800000, guid: 4c8ccdde36388394792310e3272d2f29, type: 3}
 --- !u!114 &11400000
 MonoBehaviour:
   m_ObjectHideFlags: 0
