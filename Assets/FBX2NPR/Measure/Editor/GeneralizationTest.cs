@@ -55,6 +55,8 @@ namespace FBX2NPR.EditorTools
 
         static readonly StringBuilder Log = new StringBuilder();
         static void L(string m) { Log.AppendLine(m); Console.WriteLine("[gen] " + m); }
+        // 마지막 실행의 얼굴 마스크 안 성분 수: 캐릭터 -> 조건("mix0.0" 등) -> [정면, 측면]. 회귀 테스트가 읽는다.
+        internal static readonly Dictionary<string, Dictionary<string, int[]>> LastComps = new Dictionary<string, Dictionary<string, int[]>>();
         // 외곽선 변형 실험용. FBX2NPR_VARIANT = depthonly(노멀 엣지 끔) / thin(두께 0.5) / silface(얼굴도 실루엣만). 결과는 gen6_<variant>.
         static string Variant { get { var v = Environment.GetEnvironmentVariable("FBX2NPR_VARIANT"); return string.IsNullOrEmpty(v) ? "" : v.Trim().ToLowerInvariant(); } }
         static bool HasTok(string t) { foreach (var x in Variant.Split('+')) if (x == t) return true; return false; }
@@ -157,7 +159,7 @@ namespace FBX2NPR.EditorTools
         [MenuItem("FBX2NPR/3체 일반화 실험")]
         public static void Run()
         {
-            Log.Clear();
+            Log.Clear(); LastComps.Clear();
             Directory.CreateDirectory(OutDir);
             try
             {
@@ -387,6 +389,7 @@ namespace FBX2NPR.EditorTools
                 comps[key] = new[] { CountComponents(r[0], faceMask[0]), CountComponents(r[1], faceMask[1]) };
                 compsAll[key] = new[] { CountComponents(r[0], null), CountComponents(r[1], null) };
             }
+            LastComps[c] = comps;
 
             // 비대상 불변성: mix 1 적용 후 가중치 0 정점의 노멀 각도차
             ApplyMix(parts, 1f);

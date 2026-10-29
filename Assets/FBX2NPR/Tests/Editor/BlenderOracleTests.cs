@@ -49,6 +49,7 @@ namespace FBX2NPR.Tests
             Assert.That(mean, Is.LessThan(0.01f), "평균 오차(도)");
             Assert.That(max, Is.LessThan(1f), "최대 오차(도)");
             Assert.That(over05, Is.LessThan(t.Length * 0.001f), "0.5도 넘는 정점 수");
+            Assert.Pass(string.Format("평균 {0:F4}°, 최대 {1:F4}°, 0.5° 초과 {2}개 / {3}개", mean, max, over05, t.Length));
         }
     }
 }
