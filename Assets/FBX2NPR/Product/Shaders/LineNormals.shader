@@ -15,6 +15,12 @@ Shader "FBX2NPR/LineNormals"
         _FaceWeightOn ("얼굴 가중치(UV2) 쓰기", Float) = 0
         _Cutout ("알파 컷아웃", Float) = 0
         _Cutoff ("컷아웃 문턱", Float) = 0.5
+        // 코 둘레 안쪽 선 지우기. 얼굴 리그가 렌더러마다 넣는다 (재질이 ToonBand 가 아니어도 같은 값).
+        _FaceUp ("얼굴 위 방향 (월드)", Vector) = (0, 1, 0, 0)
+        _FaceForward ("얼굴 정면 방향 (월드)", Vector) = (0, 0, 1, 0)
+        _NoseTip ("코끝 위치 (월드)", Vector) = (0, 0, 0, 0)
+        _NoseRadius ("코 영역 반경 (x 좌우, y 위, z 아래, w 뒤쪽 깊이)", Vector) = (0.02, 0.045, 0.012, 0.04)
+        _NoseLineFade ("코 영역 안쪽 선 지우기", Float) = 0
     }
 
     SubShader
@@ -42,6 +48,11 @@ Shader "FBX2NPR/LineNormals"
                 float  _FaceWeightOn;
                 float  _Cutout;
                 float  _Cutoff;
+                float4 _FaceUp;
+                float4 _FaceForward;
+                float4 _NoseTip;
+                float4 _NoseRadius;
+                float  _NoseLineFade;
             CBUFFER_END
 
             #include "OriginalNormals.hlsl"

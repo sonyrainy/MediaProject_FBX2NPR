@@ -99,7 +99,7 @@ namespace FBX2NPR.EditorTools
     [CustomEditor(typeof(ToonFaceRig))]
     public class ToonFaceRigEditor : Editor
     {
-        static readonly string[] Curated = { "m_Script", "outline", "outlineDarkness", "outlineThickness", "linePosition", "chinTilt", "chinBend", "lineSoftness", "rim", "skinShadow", "bodyShadow", "bodyShadowColor" };
+        static readonly string[] Curated = { "m_Script", "outline", "outlineDarkness", "outlineThickness", "noseLineFade", "linePosition", "chinTilt", "chinBend", "lineSoftness", "rim", "skinShadow", "bodyShadow", "bodyShadowColor" };
         bool advanced;
 
         public override void OnInspectorGUI()
@@ -114,6 +114,16 @@ namespace FBX2NPR.EditorTools
             {
                 RigEditorUtil.Prop(serializedObject, "outlineDarkness", "먹선 진하기", "0 = 없음, 1 = 검정. 결과에 곱하므로 항상 어두워진다.");
                 RigEditorUtil.Prop(serializedObject, "outlineThickness", "먹선 두께 (px)", "픽셀 단위라 거리와 상관없이 일정하다.");
+                using (new EditorGUI.DisabledScope(rig.noseTip == null))
+                    RigEditorUtil.Prop(serializedObject, "noseLineFade", "코 둘레 선 지우기", "코 영역 안의 얼굴 안쪽 선을 지우는 정도. 코가 매끈한 실사 얼굴은 콧볼 옆 회색 얼룩이 사라진다(0.7 권장). 코 모양이 개성 있는 캐릭터는 0 으로 두어 콧볼 선을 살린다.");
+                // 다시 변환하면 리그 값은 모델 설정으로 돌아간다. 슬라이더를 끌 때마다 저장하면 모델이 매번 다시 임포트되므로 버튼으로 따로 저장한다.
+                string mp = RigEditorUtil.ModelPathOf(rig.sourceModelGuid);
+                if (mp != null && rig.noseTip != null && !Mathf.Approximately(RigEditorUtil.Settings(mp).toonNoseLineFade, rig.noseLineFade)
+                    && GUILayout.Button("코 둘레 선 값을 모델 설정에 저장 (다시 변환해도 유지)"))
+                {
+                    var s = RigEditorUtil.Settings(mp); s.toonNoseLineFade = rig.noseLineFade; RigEditorUtil.SaveSettings(mp, s);
+                    GUIUtility.ExitGUI();
+                }
             }
             if (!rig.driveOutlineSettings) EditorGUILayout.HelpBox("미리보기 씬 리그: 켜고 끄기만 하고 선 값은 렌더러 피처의 것을 씁니다.", MessageType.None);
 

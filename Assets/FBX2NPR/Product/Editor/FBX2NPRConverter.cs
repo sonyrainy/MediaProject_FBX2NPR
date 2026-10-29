@@ -453,6 +453,9 @@ namespace FBX2NPR.EditorTools
                 {
                     if (marks.noseFound) rig.noseTip = Marker(rigGo.transform, "코끝", marks.noseTip);
                     rig.noseRadius = marks.noseRadius;
+                    rig.noseLineFade = crit.toonNoseLineFade;
+                    if (marks.noseFound && crit.toonNoseLineFade > 0f)
+                        rep.lines.Add(string.Format(CultureInfo.InvariantCulture, "코 둘레 안쪽 선 지우기 {0:F2} (모델 설정): 코 영역 안의 둥근 굴곡이 회색 얼룩으로 잡히지 않게", crit.toonNoseLineFade));
                     if (marks.eyesFound)
                     {
                         rig.eyeA = Marker(rigGo.transform, "눈 A", marks.eyeA); rig.eyeB = Marker(rigGo.transform, "눈 B", marks.eyeB);

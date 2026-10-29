@@ -61,6 +61,7 @@ Shader "NormalTest/ToonBand"
         _NoseShade   ("코 음영 세기 (0이면 끔)", Range(0,1)) = 0
         _NoseTip     ("코끝 위치 (월드)", Vector) = (0, 0, 0, 0)
         _NoseRadius  ("코 영역 반경 (x 좌우, y 위, z 아래, w 뒤쪽 깊이)", Vector) = (0.02, 0.045, 0.012, 0.04)
+        _NoseLineFade ("코 영역 안쪽 선 지우기 (리그가 넣음)", Range(0,1)) = 0
         _NoseStop    ("코 음영 임계값 (원본 노멀 수평 ndotl)", Float) = 0.30
         _NoseDebug   ("코(빨강)·눈(파랑) 영역 표시 (디버그)", Range(0,1)) = 0
         // 코 반달 (54번): 코가 평평한 캐릭터는 원본 노멀 대신 코끝 기준 얼굴 평면에 반달(곧은 변 + 반타원 호)을 그린다.
@@ -181,6 +182,7 @@ Shader "NormalTest/ToonBand"
                 float  _NoseShade;
                 float4 _NoseTip;
                 float4 _NoseRadius;
+                float  _NoseLineFade;
                 float  _NoseStop;
                 float  _NoseDebug;
                 float  _NoseMoon;
@@ -656,6 +658,11 @@ Shader "NormalTest/ToonBand"
                 float  _OrigTangentSpace;
                 float4 _InnerLineFade;
                 float  _FaceWeightOn;
+                float4 _FaceUp;
+                float4 _FaceForward;
+                float4 _NoseTip;
+                float4 _NoseRadius;
+                float  _NoseLineFade;
             CBUFFER_END
 
             #include "OriginalNormals.hlsl"

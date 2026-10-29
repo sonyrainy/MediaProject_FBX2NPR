@@ -43,6 +43,8 @@ namespace FBX2NPR
         [Range(0f, 1f)] public float noseStrength = 0.6f;
         [Tooltip("코 영역 반경: x 좌우, y 위(콧대), z 아래, w 뒤쪽 깊이 (미터). 좌우가 좁으면 콧방울 쪽 그림자가 잘려 콧대 옆에 뜬다. 미리보기 생성기가 눈 사이 거리와 눈~코끝 높이로 채운다.")]
         public Vector4 noseRadius = new Vector4(0.039f, 0.035f, 0.015f, 0.037f);
+        [Tooltip("코 영역(위 반경) 안에서 얼굴 안쪽 선을 지우는 정도. 0 이면 콧볼 선을 그대로 그린다(기본), 1 이면 코 둘레는 실루엣 선만 남는다. 코가 매끈한 실사 얼굴은 콧볼 옆·코끝의 둥근 굴곡이 외곽선에 넓은 회색 얼룩으로 잡혀 0.7 정도로 켜는 편이 깔끔하다(Ch07). 코 모양이 개성 있는 캐릭터(The Boss, Jones)는 콧볼·콧주름 선까지 연해지므로 0 으로 둔다. 변환할 때 모델 설정(toonNoseLineFade) 값이 들어온다.")]
+        [Range(0f, 1f)] public float noseLineFade = 0f;
 
         public enum NoseFigure { [InspectorName("초승달")] Crescent = 0, [InspectorName("세모")] Triangle = 1, [InspectorName("둥근 사다리꼴 (원래 그림자)")] RoundedQuad = 2, [InspectorName("물방울 (레퍼런스)")] Teardrop = 3 }
 
@@ -277,6 +279,7 @@ namespace FBX2NPR
             s.F("_NoseShade", (noseShadow && noseTip != null) ? noseStrength : 0f);
             if (noseTip != null) s.V("_NoseTip", noseTip.position);
             s.V("_NoseRadius", noseRadius * k);
+            s.F("_NoseLineFade", noseTip != null ? noseLineFade : 0f);
             s.F("_NoseStop", noseThreshold);
             s.F("_NoseMoon", (noseShadow && noseHalfMoon && noseTip != null) ? 1f : 0f);
             s.V("_NoseMoonShape", (noseFigure == NoseFigure.Crescent ? StretchedMoonShape() : moonShape) * k);

@@ -179,6 +179,13 @@ namespace FBX2NPR
         /// </summary>
         public int toonLipSymmetrySide = 0;
 
+        /// <summary>
+        /// 툰 모드 코 둘레 안쪽 선 지우기 (변환할 때 리그 noseLineFade 에 넣는 값, 0~1). 0 = 콧볼 선을 그대로 그린다(기본).
+        /// 코가 매끈한 실사 얼굴은 콧볼 옆·코끝의 둥근 굴곡이 외곽선에 넓은 회색 얼룩으로 잡혀 켜는 편이 깔끔하다 (Ch07 0.7).
+        /// 코 모양이 개성 있는 캐릭터(The Boss, Jones)는 콧볼·콧주름 선까지 연해져 끈다. 지워지는 선의 세기로는 둘을 가르지 못해(2026-10-29) 모델별로 적는다.
+        /// </summary>
+        [Range(0f, 1f)] public float toonNoseLineFade = 0f;
+
         public bool IsToonHiddenMesh(string meshName)
         {
             string mn = (meshName ?? "").ToLowerInvariant();
