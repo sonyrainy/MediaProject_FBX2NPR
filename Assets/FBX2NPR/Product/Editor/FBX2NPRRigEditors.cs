@@ -128,7 +128,7 @@ namespace FBX2NPR.EditorTools
             if (!rig.driveOutlineSettings) EditorGUILayout.HelpBox("미리보기 씬 리그: 켜고 끄기만 하고 선 값은 렌더러 피처의 것을 씁니다.", MessageType.None);
 
             RigEditorUtil.Header("얼굴 명암선 (턱선)");
-            RigEditorUtil.Prop(serializedObject, "linePosition", "명암선 위치", "클수록 명암선이 얼굴 안쪽(빛 쪽)으로 들어온다. -0.2 기본.");
+            RigEditorUtil.Prop(serializedObject, "linePosition", "명암선 위치", "클수록 명암선이 얼굴 안쪽(빛 쪽)으로 들어온다. -0.2 기본. 기준 빛에서 선이 눈을 가르는 캐릭터는 변환 도구가 눈꼬리 바깥으로 낮춰 넣는다(변환 기록의 '명암선 위치' 줄).");
             RigEditorUtil.Prop(serializedObject, "chinTilt", "턱선 기울기", "0 = 세로 한 줄, 클수록 명암선 아래쪽이 턱 끝까지 안쪽으로 휘어 들어온다.");
             RigEditorUtil.Prop(serializedObject, "chinBend", "휘는 구간", "작을수록 턱 가까이에서 급하게 꺾이고, 클수록 위에서부터 완만하게 휜다.");
             RigEditorUtil.Prop(serializedObject, "lineSoftness", "경계 부드러움", "작을수록 명암선이 딱 끊긴다.");
@@ -148,6 +148,17 @@ namespace FBX2NPR.EditorTools
             RigEditorUtil.Prop(serializedObject, "skinShadow", "피부 그림자 색", "얼굴 재질에만, 텍스처에 곱하는 리니어 값. 기본 회보라.");
             RigEditorUtil.Prop(serializedObject, "bodyShadow", "몸 그림자 폭", "몸·옷의 명암 경계 위치. 클수록 그림자가 넓어진다.");
             RigEditorUtil.Prop(serializedObject, "bodyShadowColor", "몸 그림자 색", "몸·옷 재질에 곱하는 리니어 값.");
+
+            string modelPath = RigEditorUtil.ModelPathOf(rig.sourceModelGuid);
+            if (modelPath != null)
+            {
+                RigEditorUtil.Header("텍스처에 굽는 값 (바꾸면 다시 변환)");
+                var s = RigEditorUtil.Settings(modelPath);
+                EditorGUI.BeginChangeCheck();
+                bool flat = EditorGUILayout.Toggle(new GUIContent("얼굴 피부 평탄화", "켜면 얼굴 피부를 한 색으로 정리하고 이목구비를 다시 그린다(만화 얼굴). 끄면 원래 피부 텍스처를 살리고 명암만 툰으로 넣는다(실사 피부). 이미 깔끔한 그림풍 텍스처는 끄는 편이 낫다(Emma)."), s.flattenFaceSkin);
+                if (EditorGUI.EndChangeCheck()) { s.flattenFaceSkin = flat; RigEditorUtil.SaveSettings(modelPath, s); }
+                if (GUILayout.Button("이 설정으로 다시 변환해 교체")) { RigEditorUtil.SwitchStyle(rig, modelPath, FBX2NPRStyle.SubcultureToon); GUIUtility.ExitGUI(); }
+            }
 
             EditorGUILayout.Space(6);
             advanced = EditorGUILayout.Foldout(advanced, "고급 (전체 항목)", true);

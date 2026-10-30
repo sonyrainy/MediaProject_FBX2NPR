@@ -41,6 +41,7 @@ namespace FBX2NPR.EditorTools
         const string LineNormalsShaderPath = ShaderDir + "/LineNormals.shader";
         // 미리보기 생성기와 같은 코 도형 기본값 (62번: 두꺼운 초승달)
         const float MoonStretchDefault = 1.6f, MoonBulgeDefault = -0.35f, MoonThicknessDefault = 0.75f, MoonWidthDefault = 1.5f;
+        const float LineSoftnessDefault = 0.015f, ChinTiltDefault = 1.0f, ChinBendDefault = 0.35f;   // 얼굴 명암선 경계 폭과 턱선 (명암선 위치 보정도 같은 값으로 잰다)
         const float DropRadiusDefault = 0.13f, DropHeightDefault = 0.37f;
         /// <summary>
         /// 평탄화 색 검사: 칠할 평탄색과 평탄화 대상 영역의 원래 평균색 사이의 색도(밝기를 뺀 색) 거리가 이보다 크면
@@ -230,8 +231,10 @@ namespace FBX2NPR.EditorTools
                 {
                     marks.CalibrateNoseStop(srcs, DefaultLight());
                     marks.FitNoseMoon(srcs, DefaultLight(), MoonThicknessDefault, 0, false, 1f, MoonBulgeDefault, 1f, DropRadiusDefault, DropHeightDefault);
+                    marks.CalibrateLineStop(srcs, centerW, DefaultLight(), ChinTiltDefault, ChinBendDefault, LineSoftnessDefault);
                     rep.lines.Add("얼굴 기준점: " + marks.Describe());
                     rep.lines.Add(marks.noseStopNote + " / " + marks.moonNote);
+                    rep.lines.Add(marks.lineStopNote);
                 }
                 else rep.lines.Add("얼굴 기준점을 찾지 못함: 머리 노멀 정리는 하되, 명암선·코 음영 없이 모든 메시에 일반 툰 밴드 재질을 입힙니다. (머리 본 이름·얼굴 재질 규칙을 모델 설정에서 확인)");
                 rep.lines.Add(string.Format(CultureInfo.InvariantCulture, "노멀 정리: 얼굴 정점 {0}개, 중심 {1}", cleaned, centerW));
@@ -473,7 +476,7 @@ namespace FBX2NPR.EditorTools
                         rig.eyeRadius = new Vector3(marks.eyeRadius.x, marks.eyeRadius.y, marks.eyeRadius.z);
                     }
                     rig.avoidEyes = false;
-                    rig.linePosition = -0.20f; rig.lineSoftness = 0.015f; rig.noseThreshold = marks.noseStop; rig.noseStrength = 0.6f; rig.rim = 0.30f;
+                    rig.linePosition = marks.lineStop; rig.lineSoftness = LineSoftnessDefault; rig.noseThreshold = marks.noseStop; rig.noseStrength = 0.6f; rig.rim = 0.30f;
                     rig.noseHalfMoon = marks.moonOn;
                     if (marks.moonOn)
                     {
@@ -483,7 +486,7 @@ namespace FBX2NPR.EditorTools
                         rig.moonStretch = MoonStretchDefault; rig.moonBulge = marks.moonExtra.x; rig.moonWidth = MoonWidthDefault;
                         rig.dropA = marks.dropA; rig.dropR = marks.dropR; rig.dropScale = 1f; rig.dropLength = 1f;
                     }
-                    rig.chinScale = marks.ChinDrop(); rig.chinTilt = 1.0f; rig.chinBend = 0.35f;
+                    rig.chinScale = marks.ChinDrop(); rig.chinTilt = ChinTiltDefault; rig.chinBend = ChinBendDefault;
                 }
                 else rig.noseShadow = false;
                 // 외곽선 값은 리그가 들고 다닌다. 변환할 때는 렌더러 피처에 쓰지 않고, 리그가 켜질 때와 값을 바꿀 때 로드된 피처에 넣는다 (ToonFaceRig.ApplyOutline).

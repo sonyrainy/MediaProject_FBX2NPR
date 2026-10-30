@@ -491,6 +491,76 @@ namespace FBX2NPR.EditorTools
             return 0.3f * face.size.y;
         }
 
+        // 명암선 위치 자동 보정 결과
+        public const float LineStopDefault = -0.20f;   // 변환 도구의 기본 명암선 위치 (ToonFaceRig.linePosition)
+        public const float LineStopMin = -0.55f;       // 더 낮추면 기준 빛(35°)에서 얼굴 앞반구가 통째로 밝아진다 (앞면의 수평 ndotl 최소 -sin35° = -0.57)
+        public const float LineCornerMargin = 0.30f;   // 명암선을 보낼 자리: 눈꼬리에서 눈 반폭의 30% 바깥
+        public float lineStop = LineStopDefault;
+        public string lineStopNote = "명암선 위치 보정 안 함";
+
+        /// <summary>
+        /// 명암선 위치를 캐릭터마다 확인한다. 기본 -0.20 이면 기준 빛에서 실사형(Ch07)은 선이 눈꼬리 근처를 지난다.
+        /// Emma(일반 스타일 3D)는 방사형 중심(얼굴 정점 평균, 촘촘한 눈·입 쪽으로 쏠림)이 눈 높이 표면 1.4cm 뒤라(Ch07 2.6cm)
+        /// 눈 자리 노멀이 이미 옆을 보고, 같은 -0.20 에서 선이 눈 한가운데를 갈라 눈·눈썹이 그늘에 묻혔다.
+        /// 그래서 기준 빛에서 그림자 쪽 눈 한가운데(앞면 표면점)가 그늘이면, 눈꼬리 바깥 표면점이 확실히 밝아질 만큼만 낮춘다.
+        /// 눈 한가운데가 밝으면 기본값을 그대로 둔다. 눈을 비율로 추정한 모델은 자리가 틀릴 수 있어 옮기지 않는다.
+        /// '눈 피하기'(타원 안만 밝힘)도 시험했지만 눈썹 바깥과 앞볼이 그늘로 남아 선이 눈 둘레에서 꺾였다. 선을 통째로 옮기면 한 줄로 내려간다.
+        /// radialCenter: 얼굴 방사형 노멀의 중심(월드). 얼굴 가중치 1 인 표면의 노멀은 그 중심에서 나가는 방향이다.
+        /// </summary>
+        public void CalibrateLineStop(List<Src> parts, Vector3 radialCenter, Vector3 lightDir, float chinTilt, float chinBend, float lineSoftness)
+        {
+            lineStop = LineStopDefault;
+            if (!faceFound || !noseFound || !eyesFound) { lineStopNote = "명암선 위치: 기본값 (눈·코끝 없음)"; return; }
+            if (eyesEstimated) { lineStopNote = "명암선 위치: 기본값 (눈을 비율로 추정해서 옮기지 않음)"; return; }
+            float lx = Mathf.Abs(lightDir.x), lz = lightDir.z;
+            if (lx * lx + lz * lz < 1e-8f) { lineStopNote = "명암선 위치: 기본값 (빛이 수직)"; return; }
+            float chin = ChinDrop();
+            var sb = new System.Text.StringBuilder();
+            for (int side = 0; side < 2; side++)
+            {
+                // 빛이 +X 쪽에서 오면 그림자는 -X 쪽 눈(B), 거울로 -X 쪽에서 오면 A
+                bool b = side == 0;
+                Vector3 eye = b ? eyeB : eyeA;
+                Vector3 lh = new Vector3(b ? lx : -lx, 0f, lz).normalized;
+                bool okC, okK;
+                Vector3 pc = FrontSurface(parts, new Vector2(eye.x, eye.y), out okC);
+                Vector3 pk = FrontSurface(parts, new Vector2(eye.x + (b ? -1f : 1f) * eyeHalfWidth * (1f + LineCornerMargin), eye.y), out okK);
+                if (!okC || !okK) continue;
+                float vC = HorizLit(pc - radialCenter, lh), vK = HorizLit(pk - radialCenter, lh);
+                bool moved;
+                float s = LineStopFor(vC, ChinLift(pc.y, chin, chinTilt, chinBend), vK, ChinLift(pk.y, chin, chinTilt, chinBend), lineSoftness, out moved);
+                lineStop = Mathf.Min(lineStop, s);
+                sb.AppendFormat(CultureInfo.InvariantCulture, "{0}눈 {1} 한가운데 {2:F2}{3}, 눈꼬리 바깥 {4:F2}", sb.Length > 0 ? " / " : "", b ? "B" : "A", vC, moved ? " (그늘)" : "", vK);
+            }
+            lineStopNote = string.Format(CultureInfo.InvariantCulture, "명암선 위치: {0:F2}{1} (기준 빛에서 {2})",
+                lineStop, lineStop < LineStopDefault ? " — 선이 눈을 갈라 눈꼬리 바깥으로 옮김" : " 기본값", sb);
+        }
+
+        /// <summary>
+        /// 한쪽 눈 기준의 명암선 위치. 셰이더 문턱은 위치 + 턱 보정(lift)이고, 수평 ndotl 이 문턱보다 크면 밝다.
+        /// 눈 한가운데가 밝으면 기본값 그대로(리터럴 -0.20 이어야 기존 모델이 그대로다), 그늘이면 눈꼬리 바깥이 경계 폭(softness)까지 밝아지는 값.
+        /// </summary>
+        internal static float LineStopFor(float vCenter, float liftCenter, float vCorner, float liftCorner, float softness, out bool moved)
+        {
+            moved = vCenter < LineStopDefault + liftCenter;
+            if (!moved) return LineStopDefault;
+            return Mathf.Clamp(vCorner - liftCorner - softness, LineStopMin, LineStopDefault);
+        }
+
+        // 셰이더(ToonBand HorizNdotL)와 같은 식: 방향의 수평 성분과 수평 빛의 내적, 수평 길이는 0.35 이상으로
+        static float HorizLit(Vector3 dir, Vector3 lightH)
+        {
+            Vector3 n = dir.normalized, h = new Vector3(n.x, 0f, n.z);
+            return Vector3.Dot(h, lightH) / Mathf.Max(h.magnitude, 0.35f);
+        }
+
+        // 셰이더의 턱 보정: 턱 끝에 가까울수록 문턱을 올려 선을 턱으로 모은다 (눈 높이에서는 0.01~0.02)
+        float ChinLift(float y, float chin, float chinTilt, float chinBend)
+        {
+            float hC = (y - noseTip.y) + chin;
+            return chinTilt * Mathf.Exp(Mathf.Min(-hC / Mathf.Max(chin * chinBend, 1e-4f), 8f));
+        }
+
         /// <summary>축별 5~95 백분위 구간의 중심과 반폭.</summary>
         static void Robust(List<Vector3> pts, out Vector3 center, out Vector3 half)
         {

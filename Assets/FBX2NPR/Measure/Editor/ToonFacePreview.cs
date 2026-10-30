@@ -143,7 +143,8 @@ namespace FBX2NPR.EditorTools
             // 세모·둥근 사다리꼴은 리그에서 고를 수 있다 (둥근 사다리꼴 꼭짓점도 같이 채운다). 길이는 리그가 적용하므로 여기서는 1.
             // 62번: 기본은 초승달(길이 1.6, 두께 0.75, 폭 1.5배, 코끝 쪽이 두꺼움, 사용자 선택). 물방울·세모·둥근 사다리꼴 값도 채워 리그에서 바꿀 수 있다.
             marks.FitNoseMoon(srcs, DefaultLight(), MoonThicknessDefault, 0, false, 1f, MoonBulgeDefault, 1f, DropRadiusDefault, DropHeightDefault);
-            Debug.Log("[FBX2NPR 미리보기] " + c + " " + marks.noseStopNote + " / " + marks.moonNote);
+            marks.CalibrateLineStop(srcs, centerW, DefaultLight(), 1.0f, 0.35f, 0.015f);   // 변환 도구와 같은 규칙: 선이 눈을 가르는 캐릭터만 눈꼬리 바깥으로
+            Debug.Log("[FBX2NPR 미리보기] " + c + " " + marks.noseStopNote + " / " + marks.moonNote + " / " + marks.lineStopNote);
 
             bool silFace = HandPainted.Contains(c);
             var rootGo = new GameObject(c + " 얼굴 명암 리그");
@@ -199,7 +200,7 @@ namespace FBX2NPR.EditorTools
             rig.avoidEyes = false;   // 49번: 명암선이 눈 바깥을 지나므로 기본은 끔. 선을 안쪽으로 옮길 때 켜는 선택 기능
             // 52번: 코 임계값은 캐릭터마다 자동 보정 — 기본 0(콧구멍 바로 위 물방울), 코가 평평하면 최소 면적이 될 때까지 올린다(유니티짱 반달).
             // 영역(noseRadius)은 FaceLandmarks 가 눈 기준으로 잡는다.
-            rig.linePosition = -0.20f; rig.lineSoftness = 0.015f; rig.noseThreshold = marks.noseStop; rig.noseStrength = 0.6f; rig.rim = 0.30f;
+            rig.linePosition = marks.lineStop; rig.lineSoftness = 0.015f; rig.noseThreshold = marks.noseStop; rig.noseStrength = 0.6f; rig.rim = 0.30f;
             rig.noseHalfMoon = marks.moonOn;
             if (marks.moonOn)
             {
