@@ -57,6 +57,7 @@ namespace FBX2NPR.EditorTools
         public const float FlatLumaRatioMin = 0.6f;
         // 파서가 눈·눈썹을 '찾았다'고 볼 최소 비율(관측 텍셀 대비). Ch07 눈 1.7% 눈썹 0.6%, The Boss 눈 0.0% 눈썹 0 (78번) — 두 체로 정한 값
         public const float ParserEyeMinFrac = 0.002f, ParserBrowMinFrac = 0.001f;
+        public const float ParserEyeTexMinFrac = 0.20f;   // 눈 메시 전용 텍스처에서 눈으로 잡힌 텍셀 비율이 이 이상이면 '눈 찾음' (Emma 69.7%)
         /// <summary>도구가 만든 에셋(메시·재질·평탄화 텍스처)에 붙이는 라벨. 찾아보기용 표시이고, 정리는 리그에 적어 둔 목록으로 한다.</summary>
         public const string GeneratedLabel = "FBX2NPRGenerated";
         /// <summary>실험·비교용: 0 이상이면 모델 설정의 bodyFlatten 대신 이 값을 쓴다 (0 얼굴만, 1 피부까지, 2 옷까지).</summary>
@@ -76,6 +77,7 @@ namespace FBX2NPR.EditorTools
             public string model, prefabPath;
             public Bounds head, body;                 // 변환할 때 자세의 월드 바운드 (비교 렌더의 구도용)
             public bool faceFound, handPainted, flattenBlocked;
+            public bool parseFailed;                    // 얼굴 파싱이 돌았지만 라벨을 텍스처로 옮기지 못함 (데이터 패스가 빔): 결과가 평소와 다를 수 있다
             public List<string> lines = new List<string>();
             public override string ToString() { return string.Join("\n", lines.ToArray()); }
         }
@@ -256,7 +258,13 @@ namespace FBX2NPR.EditorTools
                                 OriginalMaterialFix.Apply(pgo, crit, modelPath, ptemps);
                                 var pr = FBX2NPRParseBake.Bake(pgo, crit, modelPath, parser, 1024, null, string.IsNullOrEmpty(DebugDir) ? null : DebugDir, Safe(c));
                                 foreach (var l in pr.log) rep.lines.Add("  얼굴 파싱 · " + l.Trim());
-                                foreach (var t in pr.textures) labelsOf[t.albedo] = t;
+                                if (pr.dataEmpty)
+                                {
+                                    rep.parseFailed = true;
+                                    const string warn = "경고: 얼굴 파싱의 데이터 패스가 비어 라벨 없이 평탄화합니다 — 평소 결과와 다를 수 있습니다. 에디터를 보통 창으로 다시 띄운 뒤 다시 변환하세요.";
+                                    rep.lines.Add(warn); Debug.LogWarning("[FBX2NPR] " + modelPath + ": " + warn);
+                                }
+                                else foreach (var t in pr.textures) labelsOf[t.albedo] = t;
                             }
                             catch (Exception ex) { rep.lines.Add("얼굴 파싱 실패 (예전 방식으로 진행): " + ex.Message); labelsOf.Clear(); }
                             finally { UnityEngine.Object.DestroyImmediate(pgo); foreach (var t in ptemps) if (t != null) UnityEngine.Object.DestroyImmediate(t); }
@@ -299,13 +307,17 @@ namespace FBX2NPR.EditorTools
                         if (labelsOf.TryGetValue(p.albedo, out tr) && tr.observed > 0)
                         {
                             int eyes = tr.classCount[FaceParser.LEye] + tr.classCount[FaceParser.REye], brows = tr.classCount[FaceParser.LBrow] + tr.classCount[FaceParser.RBrow];
-                            bool trust = eyes >= ParserEyeMinFrac * tr.observed && brows >= ParserBrowMinFrac * tr.observed;
+                            // 눈알이 따로 된 메시·텍스처인 모델(Emma)은 얼굴 텍스처에 눈꺼풀 테두리만 남아 눈이 0.19% 로 기준에 못 미쳤다.
+                            // 파서는 눈 텍스처에서 눈을 69.7% 로 잡았으므로, 얼굴 텍스처에서 못 찾았으면 눈 메시 전용 텍스처의 결과로 인정한다 (눈썹은 얼굴 텍스처 그대로).
+                            string eyeElsewhere = eyes >= ParserEyeMinFrac * tr.observed ? null : SeparateEyeTexture(labelsOf.Values, p.albedo);
+                            bool trust = (eyes >= ParserEyeMinFrac * tr.observed || eyeElsewhere != null) && brows >= ParserBrowMinFrac * tr.observed;
+                            if (trust && eyeElsewhere != null) labelSkip = eyeElsewhere;
                             if (trust) lab = new SkinFlatBake.Labels { W = tr.W, H = tr.H, label = tr.label, filled = tr.filled, trustFeatures = true, draw = crit.drawFeatures ? new FeatureDrawCore.Opt { lipBottomExtend = crit.toonLipBottomExtend, lipTipExtend = crit.toonLipTipExtend } : null };
                             else labelSkip = string.Format(CultureInfo.InvariantCulture, "라벨 안 씀(파서가 눈 {0:F2}%·눈썹 {1:F2}% 로 못 찾음, 기준 {2:F1}%·{3:F1}%) — 예전 방식(머리 본 가중치 + 색 통계). ",
                                                            100f * eyes / tr.observed, 100f * brows / tr.observed, 100f * ParserEyeMinFrac, 100f * ParserBrowMinFrac);
                         }
                         var r = SkinFlatBake.Bake(p.albedo, fsrc, marks, new SkinFlatCore.Opt(), false, lab);
-                        if (lab != null) r.note = r.labelNote + r.note; else if (labelSkip != null) r.note = labelSkip + r.note;
+                        if (lab != null) r.note = r.labelNote + (labelSkip ?? "") + r.note; else if (labelSkip != null) r.note = labelSkip + r.note;
                         if (r.drawn != null)
                         {
                             rep.lines.Add("  이목구비 그리기: 지운 텍셀 " + r.drawn.erasedPx + ", 눈썹 " + r.drawn.browPx + ", 눈매 " + r.drawn.lashPx + ", 콧구멍 " + r.drawn.nostrilN + "개, 입술 " + r.drawn.lipPx + " (얼굴 위 = " + (r.drawn.upIsPlusY ? "+y" : "-y") + ")");
@@ -623,6 +635,25 @@ namespace FBX2NPR.EditorTools
             gap = ChromaGap(fr, fg, fb, tr, tg, tb);
             lumaRatio = Luma(tr, tg, tb) / Mathf.Max(Luma(fr, fg, fb), 1e-3f);
             return gap > FlatColorGapMax || lumaRatio < FlatLumaRatioMin || lumaRatio > 1f / FlatLumaRatioMin;
+        }
+
+        /// <summary>
+        /// 얼굴 텍스처가 아니고 눈 메시만 쓰는 텍스처(메시 이름에 eye, 눈썹·속눈썹 제외) 가운데 파서가 눈으로 잡은 텍셀이
+        /// ParserEyeTexMinFrac 이상인 것을 찾는다. 있으면 변환 기록에 남길 문구, 없으면 null.
+        /// </summary>
+        internal static string SeparateEyeTexture(IEnumerable<FBX2NPRParseBake.TexResult> all, Texture face)
+        {
+            foreach (var t in all)
+            {
+                if (t.albedo == face || t.observed <= 0 || t.meshes.Count == 0) continue;
+                bool eyeOnly = true;
+                foreach (var m in t.meshes) { string n = m.ToLowerInvariant(); if (!n.Contains("eye") || n.Contains("brow") || n.Contains("lash")) { eyeOnly = false; break; } }
+                if (!eyeOnly) continue;
+                float f = (float)(t.classCount[FaceParser.LEye] + t.classCount[FaceParser.REye]) / t.observed;
+                if (f >= ParserEyeTexMinFrac)
+                    return string.Format(CultureInfo.InvariantCulture, "눈은 눈 메시 텍스처 {0}에서 찾음({1:F1}%, 얼굴 텍스처에는 눈꺼풀 테두리만 있음). ", t.albedo != null ? t.albedo.name : "?", 100f * f);
+            }
+            return null;
         }
 
         /// <summary>

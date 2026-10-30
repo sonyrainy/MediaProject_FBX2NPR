@@ -52,6 +52,7 @@ namespace FBX2NPR.EditorTools
             public List<TexResult> textures = new List<TexResult>();
             public List<string> log = new List<string>();
             public float alignMismatch = -1f;               // 색 렌더와 데이터 패스의 실루엣 불일치 비율(정면). 커지면 투영이 어긋난 것
+            public bool dataEmpty;                          // 정면 데이터 패스에 지오메트리가 하나도 없다: 라벨을 텍스처로 옮길 수 없다
         }
 
         class Slot { public string name; public Mesh mesh; public Matrix4x4 l2w; public int sub; public bool cutout; public float cutoff; public Texture albedo; }
@@ -161,6 +162,10 @@ namespace FBX2NPR.EditorTools
                 if (vds.Count == 0) { log.Add("뷰를 하나도 못 찍음"); return res; }
                 // 정렬 검사: 정면 뷰의 '배경이 아닌 화소'와 데이터 패스의 '지오메트리 있음'이 얼마나 다른가
                 res.alignMismatch = vds[0].probs != null ? AlignCheck(vds[0], log) : -1f;
+                // 데이터 패스(DrawMeshNow)가 아무것도 못 그리면 모든 텍셀이 '관측 0%' 가 되어 라벨 없이 평탄화된다. 오류 없이 결과만 달라지므로 따로 알린다.
+                // 실측(2026-10-30): 숨김 창으로 띄운 D3D12 에디터에서 GL 즉시 그리기가 비었고, Ch07 이 라벨 없이 평탄화돼 얼굴이 1.28% 달라졌다.
+                int geo = 0; var d0 = vds[0].data; for (int i = 3; i < d0.Length; i += 4) if (d0[i] > 0.5f) geo++;
+                if (geo == 0) { res.dataEmpty = true; log.Add("  데이터 패스가 비었음: 지오메트리 화소 0 — 라벨을 텍스처로 옮길 수 없어 쓰지 않는다 (에디터 그래픽 상태 확인: 숨김 창 등)"); }
 
                 // 3) 텍스처별 역투영
                 var byTex = new Dictionary<Texture, List<Slot>>();
