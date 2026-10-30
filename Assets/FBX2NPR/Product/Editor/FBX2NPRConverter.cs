@@ -48,6 +48,12 @@ namespace FBX2NPR.EditorTools
         /// 평탄화가 도는 세 텍스처로만 맞춘 값이다: Ch07 0.014, The Boss 0.007 은 통과, Jones 0.040 은 걸림 (그 사이의 값).
         /// </summary>
         public const float FlatColorGapMax = 0.025f;
+        /// <summary>
+        /// 평탄화 밝기 검사: 평탄화 대상 영역의 원래 평균 밝기가 평탄색 밝기의 이 배수보다 어둡거나 그 역수배보다 밝으면 건너뛴다.
+        /// 색도만 보면 검은 머리(무채색)와 밝은 피부가 가깝게 나온다. 메시 하나·텍스처 한 장인 AI 모델(MeshyWoman)은 머리 영역에 머리카락이 함께 들어가
+        /// 색 차이 0.022 로 통과해 머리카락까지 피부색으로 칠했다 (밝기 0.22배). 평탄화가 도는 텍스처: Ch07 0.88배, The Boss 0.89배, Emma 0.90배.
+        /// </summary>
+        public const float FlatLumaRatioMin = 0.6f;
         // 파서가 눈·눈썹을 '찾았다'고 볼 최소 비율(관측 텍셀 대비). Ch07 눈 1.7% 눈썹 0.6%, The Boss 눈 0.0% 눈썹 0 (78번) — 두 체로 정한 값
         public const float ParserEyeMinFrac = 0.002f, ParserBrowMinFrac = 0.001f;
         /// <summary>도구가 만든 에셋(메시·재질·평탄화 텍스처)에 붙이는 라벨. 찾아보기용 표시이고, 정리는 리그에 적어 둔 목록으로 한다.</summary>
@@ -306,8 +312,9 @@ namespace FBX2NPR.EditorTools
                         foreach (var tm in tmpMeshes) UnityEngine.Object.DestroyImmediate(tm);
                         var k = r.core;
                         string texBase = TexBase(dir, p.albedo, texNames);
-                        float gap = (k != null && r.albedo != null) ? ChromaGap(k.flatR, k.flatG, k.flatB, k.tgtR, k.tgtG, k.tgtB) : 0f;
-                        bool blocked = r.albedo != null && gap > FlatColorGapMax && !crit.flattenIgnoreColorCheck;
+                        float gap = 0f, lumaRatio = 1f;
+                        bool colorOff = k != null && r.albedo != null && FlatColorBlocked(k.flatR, k.flatG, k.flatB, k.tgtR, k.tgtG, k.tgtB, out gap, out lumaRatio);
+                        bool blocked = r.albedo != null && colorOff && !crit.flattenIgnoreColorCheck;
                         if (AssetDatabase.LoadAssetAtPath<Texture2D>(texBase + "_flatmask.png") != null) AssetDatabase.DeleteAsset(texBase + "_flatmask.png");   // 예전 실행의 디버그 마스크
                         if (r.mask != null && !string.IsNullOrEmpty(DebugDir))
                             File.WriteAllBytes(Path.Combine(DebugDir, Safe(c) + "_" + Safe(p.albedo.name) + "_flatmask" + (blocked ? "_blocked" : "") + ".png"), r.mask.EncodeToPNG());
@@ -342,15 +349,19 @@ namespace FBX2NPR.EditorTools
                             else if (k != null && k.note.Contains("이미 평평함")) { alreadyFlat++; faceBlocked.Add(p.albedo); }
                             // 그 밖의 건너뜀(표본 없음 등: 얼굴 정점이 조금 걸쳤을 뿐 얼굴 텍스처가 아닌 경우)은 아래 몸 단계에서 다시 본다
                         }
-                        string what = blocked ? "그대로 씀 — 피부가 한 색이 아님 (평탄색과 원래 평균색의 색 차이가 기준보다 큼. 억지로 하려면 모델 설정 flattenIgnoreColorCheck)"
-                                    : r.Skipped ? "그대로 씀 — " + (k != null ? k.note : "") : "피부 평탄화본 저장";
-                        // 색 차이는 평탄화가 실제로 돈 텍스처에서만 잰다 (건너뛴 텍스처는 '-')
-                        string gapText = (k != null && r.albedo != null) ? gap.ToString("F3", CultureInfo.InvariantCulture) : "-";
+                        string what = !blocked ? (r.Skipped ? "그대로 씀 — " + (k != null ? k.note : "") : "피부 평탄화본 저장")
+                                    : gap > FlatColorGapMax ? "그대로 씀 — 피부가 한 색이 아님 (평탄색과 원래 평균색의 색 차이가 기준보다 큼. 억지로 하려면 모델 설정 flattenIgnoreColorCheck)"
+                                    : "그대로 씀 — 평탄색과 원래 영역의 밝기가 너무 다름 (머리카락처럼 피부가 아닌 곳이 섞였을 수 있음. 억지로 하려면 모델 설정 flattenIgnoreColorCheck)";
+                        // 색 차이·밝기 비는 평탄화가 실제로 돈 텍스처에서만 잰다 (건너뛴 텍스처는 '-')
+                        bool measured = k != null && r.albedo != null;
+                        string gapText = measured ? gap.ToString("F3", CultureInfo.InvariantCulture) : "-";
+                        string lumaText = measured ? lumaRatio.ToString("F2", CultureInfo.InvariantCulture) : "-";
                         rep.lines.Add(string.Format(CultureInfo.InvariantCulture,
-                            "텍스처 {0}: {1} (잔무늬 {2:F2}, 평탄색 ({3},{4},{5}), 대상 평균색 ({6:F0},{7:F0},{8:F0}), 색 차이 {9} / 기준 {10:F3}, 남긴 비율 {11:F1}%) {12}",
+                            "텍스처 {0}: {1} (잔무늬 {2:F2}, 평탄색 ({3},{4},{5}), 대상 평균색 ({6:F0},{7:F0},{8:F0}), 색 차이 {9} / 기준 {10:F3}, 밝기 비 {13} / 기준 {14:F2}~{15:F2}, 남긴 비율 {11:F1}%) {12}",
                             p.albedo.name, what, k != null ? k.gateFine : 0f,
                             k != null ? k.flatR : 0, k != null ? k.flatG : 0, k != null ? k.flatB : 0,
-                            k != null ? k.tgtR : 0f, k != null ? k.tgtG : 0f, k != null ? k.tgtB : 0f, gapText, FlatColorGapMax, k != null ? k.keepPct : 0f, r.note));
+                            k != null ? k.tgtR : 0f, k != null ? k.tgtG : 0f, k != null ? k.tgtB : 0f, gapText, FlatColorGapMax, k != null ? k.keepPct : 0f, r.note,
+                            lumaText, FlatLumaRatioMin, 1f / FlatLumaRatioMin));
                         foreach (var t in new UnityEngine.Object[] { r.albedo, r.mask, r.copy }) if (t != null) UnityEngine.Object.DestroyImmediate(t);
                     }
                     // 얼굴이 없는 텍스처(옷만 따로 쓰는 텍스처 등)도 같은 방식으로. 얼굴 평탄화가 하나라도 됐을 때만 한다:
@@ -596,6 +607,19 @@ namespace FBX2NPR.EditorTools
             float s1 = Mathf.Max(r1 + g1 + b1, 1e-3f), s2 = Mathf.Max(r2 + g2 + b2, 1e-3f);
             float dr = r1 / s1 - r2 / s2, dg = g1 / s1 - g2 / s2;
             return Mathf.Sqrt(dr * dr + dg * dg);
+        }
+
+        static float Luma(float r, float g, float b) { return 0.2126f * r + 0.7152f * g + 0.0722f * b; }
+
+        /// <summary>
+        /// 칠할 평탄색(f)과 평탄화 대상 영역의 원래 평균색(t)을 보고 평탄화를 막을지 정한다 (0~255 값).
+        /// 색도 거리가 FlatColorGapMax 를 넘거나, 원래 밝기가 평탄색 밝기의 FlatLumaRatioMin 배 ~ 그 역수배를 벗어나면 막는다.
+        /// </summary>
+        internal static bool FlatColorBlocked(float fr, float fg, float fb, float tr, float tg, float tb, out float gap, out float lumaRatio)
+        {
+            gap = ChromaGap(fr, fg, fb, tr, tg, tb);
+            lumaRatio = Luma(tr, tg, tb) / Mathf.Max(Luma(fr, fg, fb), 1e-3f);
+            return gap > FlatColorGapMax || lumaRatio < FlatLumaRatioMin || lumaRatio > 1f / FlatLumaRatioMin;
         }
 
         /// <summary>
