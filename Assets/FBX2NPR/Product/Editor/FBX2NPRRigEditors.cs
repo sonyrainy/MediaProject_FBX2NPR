@@ -99,7 +99,7 @@ namespace FBX2NPR.EditorTools
     [CustomEditor(typeof(ToonFaceRig))]
     public class ToonFaceRigEditor : Editor
     {
-        static readonly string[] Curated = { "m_Script", "outline", "outlineDarkness", "outlineThickness", "noseLineFade", "linePosition", "chinTilt", "chinBend", "lineSoftness", "rim", "skinShadow", "bodyShadow", "bodyShadowColor" };
+        static readonly string[] Curated = { "m_Script", "outline", "outlineDarkness", "outlineThickness", "noseLineFade", "linePosition", "chinTilt", "chinBend", "lineSoftness", "rim", "urpLighting", "faceReceiveShadows", "bodyReceiveShadows", "skinShadow", "bodyShadow", "bodyShadowColor" };
         bool advanced;
 
         public override void OnInspectorGUI()
@@ -135,6 +135,14 @@ namespace FBX2NPR.EditorTools
 
             RigEditorUtil.Header("림라이트");
             RigEditorUtil.Prop(serializedObject, "rim", "림라이트 밝기", "빛 쪽 윤곽선 안쪽을 살짝 밝게. 0 = 끔.");
+
+            RigEditorUtil.Header("조명");
+            RigEditorUtil.Prop(serializedObject, "urpLighting", "URP 조명 받기", "켜면 씬의 메인 라이트(색·드리운 그림자)를 받는다(점·스폿 조명은 받지 않음). 센 빛에서도 텍스처보다 밝게 날리지 않고 색조만 물든다. 끄면 블렌더 대조 모드(빛 방향만, 밴드 색 고정).");
+            using (new EditorGUI.DisabledScope(!rig.urpLighting))
+            {
+                RigEditorUtil.Prop(serializedObject, "faceReceiveShadows", "얼굴이 받는 그림자", "0 = 얼굴은 명암선만(기본), 1 = 코·머리카락·주변 물체 그림자가 얼굴에 진다. 코 그림자가 번진 얼룩처럼 보일 수 있다.");
+                RigEditorUtil.Prop(serializedObject, "bodyReceiveShadows", "몸·머리카락이 받는 그림자", "1 = 나무·건물 그림자에 들어가면 같이 어두워진다(기본). 머리카락이 많으면 가닥끼리·앞머리가 눈에 드리운 그림자까지 생겨 복잡해질 수 있다.");
+            }
 
             RigEditorUtil.Header("그림자 색");
             RigEditorUtil.Prop(serializedObject, "skinShadow", "피부 그림자 색", "얼굴 재질에만, 텍스처에 곱하는 리니어 값. 기본 회보라.");

@@ -11,6 +11,7 @@ namespace FBX2NPR
     /// 자동으로 못 찾은 캐릭터(Jones 처럼 눈 메시가 없는 경우)는 표식을 제자리로 옮기고 '눈 피하기'를 켜면 된다.
     ///
     /// 셰이더는 씬 라이트가 아니라 _LightDir 를 쓴다. '빛' 표식이 바라보는 방향으로 빛이 나아간다 (디렉셔널 라이트와 같은 규칙).
+    /// URP 조명(urpLighting)을 켜면 셰이더가 씬의 메인 라이트를 직접 받는다 (그때는 '빛' 표식이 쓰이지 않는다). 점·스폿 조명은 받지 않는다.
     ///
     /// 변환한 프리팹에서는 이 오브젝트의 스케일을 직접 바꾸지 말 것. 리그의 월드 스케일을 프리팹 배율로 읽어 코·눈 영역 크기에 곱한다.
     /// 플레이 중에는 다른 스크립트(시선 추적·IK)가 머리 본을 움직인 뒤에 값을 넣도록 실행 순서를 뒤로 미뤘다.
@@ -89,6 +90,14 @@ namespace FBX2NPR
 
         [Header("림 (빛 쪽 윤곽선 안쪽을 살짝 밝게)")]
         [Range(0f, 1f)] public float rim = 0.3f;
+
+        [Header("URP 조명")]
+        [Tooltip("켜면 이 캐릭터의 ToonBand 재질이 씬의 메인 라이트(방향·색·드리운 그림자)를 받는다. 점·스폿 조명은 받지 않는다. 빛이 아무리 세도 텍스처보다 밝게 날리지 않고 색조만 물든다. 끄면(기본) 블렌더 대조 모드: 빛 방향만 따르고 밴드 색은 고정이다. 명암선·코 음영의 모양은 두 모드가 같다.")]
+        public bool urpLighting = false;
+        [Tooltip("URP 조명일 때 얼굴이 드리운 그림자를 받는 세기. 0 이면(기본) 얼굴은 명암선만 따른다. 1 이면 코·머리카락·주변 물체의 그림자가 얼굴에 진다. 코가 볼에 드리운 그림자는 그림자 맵 해상도대로 번진 얼룩처럼 보일 수 있다. 몸·옷은 아래 값을 따른다.")]
+        [Range(0f, 1f)] public float faceReceiveShadows = 0f;
+        [Tooltip("URP 조명일 때 몸·옷·머리카락·눈이 드리운 그림자를 받는 세기 (얼굴 피부는 위 값). 1 이면(기본) 나무·건물 그림자에 들어가면 같이 어두워진다. 머리카락이 많은 캐릭터(유니티짱)는 가닥끼리, 앞머리가 눈에 드리운 그림자까지 생겨 화면이 복잡해질 수 있다.")]
+        [Range(0f, 1f)] public float bodyReceiveShadows = 1f;
 
         [Header("피부 그림자 색 (얼굴 재질에만, 텍스처에 곱하는 리니어 값)")]
         [Tooltip("기본은 원래 회보라(0.72, 0.66, 0.70). 58번에서 살구빛(0.86, 0.62, 0.60)·분홍빛(0.84, 0.60, 0.68)을 시험했지만 사용자가 원래 색을 유지하기로 했다(59번).")]
@@ -214,7 +223,7 @@ namespace FBX2NPR
             // 미리보기 씬: 표식 하나가 씬 전체의 외곽선을 켜고 끈다. 변환한 프리팹은 ApplyOutline 에서 따로 한다.
             if (outlineFeature != null && !driveOutlineSettings && outlineFeature.isActive != outline) outlineFeature.SetActive(outline);
 
-            foreach (var m in otherMaterials) if (m != null) m.SetVector("_LightDir", l);
+            foreach (var m in otherMaterials) if (m != null) { m.SetVector("_LightDir", l); m.SetFloat("_UrpLighting", urpLighting ? 1f : 0f); }
             foreach (var m in faceMaterials) { if (m != null) PushFace(new Sink { m = m }, up, fwd, l, 1f); }
 
             if (faceRenderers.Count == 0 && otherRenderers.Count == 0) return;
@@ -260,6 +269,7 @@ namespace FBX2NPR
         void PushBody(MaterialPropertyBlock b, Vector3 l, Vector4 bodyBand)
         {
             b.SetVector("_LightDir", l); b.SetFloat("_Stop2", bodyShadow); b.SetVector("_Band1", bodyBand);
+            b.SetFloat("_UrpLighting", urpLighting ? 1f : 0f); b.SetFloat("_ShadowReceive", bodyReceiveShadows);
         }
 
         // k: 길이 배율. 재질 에셋 경로(미리보기 씬)는 늘 1, 변환한 프리팹은 인스턴스의 배율.
@@ -304,6 +314,9 @@ namespace FBX2NPR
             s.V("_EyeRadius", new Vector4(eyeRadius.x, eyeRadius.y, eyeRadius.z, 0f) * k);
 
             s.F("_RimLight", rim);
+            s.F("_UrpLighting", urpLighting ? 1f : 0f);
+            s.F("_FaceShadowReceive", faceReceiveShadows);
+            s.F("_ShadowReceive", bodyReceiveShadows);   // 얼굴 재질 안의 목 아래·손 (얼굴 가중치 밖)
             s.V("_Band1", new Vector4(skinShadow.r, skinShadow.g, skinShadow.b, 1f));
             s.F("_NoseDebug", showRegions ? 1f : 0f);
         }
