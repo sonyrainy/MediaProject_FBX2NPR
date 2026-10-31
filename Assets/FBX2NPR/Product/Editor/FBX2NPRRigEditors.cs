@@ -116,14 +116,6 @@ namespace FBX2NPR.EditorTools
                 RigEditorUtil.Prop(serializedObject, "outlineThickness", "먹선 두께 (px)", "픽셀 단위라 거리와 상관없이 일정하다.");
                 using (new EditorGUI.DisabledScope(rig.noseTip == null))
                     RigEditorUtil.Prop(serializedObject, "noseLineFade", "코 둘레 선 지우기", "코 영역 안의 얼굴 안쪽 선을 지우는 정도. 코가 매끈한 실사 얼굴은 콧볼 옆 회색 얼룩이 사라진다(0.7 권장). 코 모양이 개성 있는 캐릭터는 0 으로 두어 콧볼 선을 살린다.");
-                // 다시 변환하면 리그 값은 모델 설정으로 돌아간다. 슬라이더를 끌 때마다 저장하면 모델이 매번 다시 임포트되므로 버튼으로 따로 저장한다.
-                string mp = RigEditorUtil.ModelPathOf(rig.sourceModelGuid);
-                if (mp != null && rig.noseTip != null && !Mathf.Approximately(RigEditorUtil.Settings(mp).toonNoseLineFade, rig.noseLineFade)
-                    && GUILayout.Button("코 둘레 선 값을 모델 설정에 저장 (다시 변환해도 유지)"))
-                {
-                    var s = RigEditorUtil.Settings(mp); s.toonNoseLineFade = rig.noseLineFade; RigEditorUtil.SaveSettings(mp, s);
-                    GUIUtility.ExitGUI();
-                }
             }
             if (!rig.driveOutlineSettings) EditorGUILayout.HelpBox("미리보기 씬 리그: 켜고 끄기만 하고 선 값은 렌더러 피처의 것을 씁니다.", MessageType.None);
 
@@ -152,8 +144,24 @@ namespace FBX2NPR.EditorTools
             string modelPath = RigEditorUtil.ModelPathOf(rig.sourceModelGuid);
             if (modelPath != null)
             {
-                RigEditorUtil.Header("텍스처에 굽는 값 (바꾸면 다시 변환)");
                 var s = RigEditorUtil.Settings(modelPath);
+
+                // 다시 변환하면 리그 값은 자동값으로 돌아간다. 슬라이더를 끌 때마다 저장하면 모델이 매번 다시 임포트되므로 버튼으로 따로 저장한다.
+                RigEditorUtil.Header("조정값 저장 (다시 변환해도 유지)");
+                bool same = s.toonRigSaved && JsonUtility.ToJson(s.toonRig) == JsonUtility.ToJson(ToonRigValues.From(rig));
+                EditorGUILayout.LabelField(!s.toonRigSaved ? "저장한 값 없음: 다시 변환하면 위 값이 자동값으로 돌아갑니다."
+                                         : same ? "저장한 값 있음: 다시 변환해도 지금 값이 들어갑니다."
+                                         : "저장한 값 있음 (지금 값과 다름): 다시 변환하면 저장한 값이 들어갑니다.", EditorStyles.wordWrappedMiniLabel);
+                using (new EditorGUILayout.HorizontalScope())
+                {
+                    if (GUILayout.Button(new GUIContent("지금 값을 저장", "위 항목(외곽선·명암선·림·조명·그림자 색, 고급 제외)을 모델 설정에 저장합니다. 다시 변환해도 자동값 대신 이 값이 들어갑니다.")))
+                    { s.toonRigSaved = true; s.toonRig = ToonRigValues.From(rig); RigEditorUtil.SaveSettings(modelPath, s); GUIUtility.ExitGUI(); }
+                    using (new EditorGUI.DisabledScope(!s.toonRigSaved))
+                        if (GUILayout.Button(new GUIContent("저장한 값 지우기", "다음 변환부터 자동값을 씁니다. 지금 인스펙터의 값은 바꾸지 않습니다.")))
+                        { s.toonRigSaved = false; RigEditorUtil.SaveSettings(modelPath, s); GUIUtility.ExitGUI(); }
+                }
+
+                RigEditorUtil.Header("텍스처에 굽는 값 (바꾸면 다시 변환)");
                 EditorGUI.BeginChangeCheck();
                 bool flat = EditorGUILayout.Toggle(new GUIContent("얼굴 피부 평탄화", "켜면 얼굴 피부를 한 색으로 정리하고 이목구비를 다시 그린다(만화 얼굴). 끄면 원래 피부 텍스처를 살리고 명암만 툰으로 넣는다(실사 피부). 이미 깔끔한 그림풍 텍스처는 끄는 편이 낫다(Emma)."), s.flattenFaceSkin);
                 if (EditorGUI.EndChangeCheck()) { s.flattenFaceSkin = flat; RigEditorUtil.SaveSettings(modelPath, s); }

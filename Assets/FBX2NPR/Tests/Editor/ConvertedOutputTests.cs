@@ -78,22 +78,26 @@ namespace FBX2NPR.Tests
         }
 
         [Test]
-        public void RigNoseLineFadeComesFromModelSettings()
+        public void RigValuesComeFromModelSettings()
         {
             int rigs = 0;
             foreach (var pf in ToonPrefabs())
             {
                 var rig = pf.GetComponentInChildren<ToonFaceRig>(true);
-                if (rig == null || rig.noseTip == null || string.IsNullOrEmpty(rig.sourceModelGuid)) continue;
+                if (rig == null || string.IsNullOrEmpty(rig.sourceModelGuid)) continue;
                 var imp = AssetImporter.GetAtPath(AssetDatabase.GUIDToAssetPath(rig.sourceModelGuid));
                 if (imp == null) continue;
                 var s = FBX2NPRAssetSettings.FromJson(imp.userData) ?? new FBX2NPRAssetSettings();
-                // 변환 도구가 모델 설정의 코 둘레 선 지우기 값을 리그에 넣는다. 리그에서만 바꾸면 다시 변환할 때 사라지므로,
-                // 다르면 리그 인스펙터의 '모델 설정에 저장'을 누르거나 다시 변환한다.
-                Assert.That(rig.noseLineFade, Is.EqualTo(s.toonNoseLineFade).Within(1e-4f), pf.name + ": 리그의 코 둘레 선 지우기 값이 모델 설정과 다릅니다.");
+                // 변환 도구는 리그 인스펙터에서 저장한 조정값이 있으면 그 값을, 없으면 모델 설정의 코 둘레 선 지우기 값을 리그에 넣는다.
+                // 리그에서만 바꾸면 다시 변환할 때 사라지므로, 다르면 리그 인스펙터의 '지금 값을 저장'을 누르거나 다시 변환한다.
+                if (s.toonRigSaved)
+                    Assert.That(JsonUtility.ToJson(ToonRigValues.From(rig)), Is.EqualTo(JsonUtility.ToJson(s.toonRig)), pf.name + ": 리그 값이 모델 설정에 저장한 조정값과 다릅니다.");
+                else if (rig.noseTip != null)
+                    Assert.That(rig.noseLineFade, Is.EqualTo(s.toonNoseLineFade).Within(1e-4f), pf.name + ": 리그의 코 둘레 선 지우기 값이 모델 설정과 다릅니다.");
+                else continue;
                 rigs++;
             }
-            if (rigs == 0) Assert.Ignore("코끝을 찾은 얼굴 리그가 있는 변환 결과가 없습니다 (" + FBX2NPRConverter.OutRoot + ")");
+            if (rigs == 0) Assert.Ignore("모델 설정과 비교할 얼굴 리그가 있는 변환 결과가 없습니다 (" + FBX2NPRConverter.OutRoot + ")");
         }
     }
 }

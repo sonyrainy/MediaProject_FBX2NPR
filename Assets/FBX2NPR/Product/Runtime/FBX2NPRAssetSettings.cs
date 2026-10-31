@@ -186,6 +186,13 @@ namespace FBX2NPR
         /// </summary>
         [Range(0f, 1f)] public float toonNoseLineFade = 0f;
 
+        /// <summary>
+        /// 툰 리그 인스펙터에서 '지금 값을 저장'한 조정값. 켜져 있으면 다시 변환해도 자동값(명암선 자동 보정·기본값·toonNoseLineFade) 대신 이 값을 넣는다.
+        /// 예전에는 다시 변환하면 코 둘레 선과 평탄화 말고는 인스펙터에서 바꾼 값이 모두 기본값으로 돌아갔다 (2026-10-31).
+        /// </summary>
+        public bool toonRigSaved = false;
+        public ToonRigValues toonRig = new ToonRigValues();
+
         public bool IsToonHiddenMesh(string meshName)
         {
             string mn = (meshName ?? "").ToLowerInvariant();
@@ -259,5 +266,41 @@ namespace FBX2NPR
         }
 
         public string ToJson() { return JsonUtility.ToJson(this); }
+    }
+
+    /// <summary>
+    /// 툰 리그 인스펙터의 기본 항목(외곽선·명암선·림·조명·그림자 색) 값 묶음. 모델 설정에 저장해 다시 변환해도 유지한다.
+    /// 고급 항목(코 도형·영역 반경 등)은 변환 도구가 모델 모양에서 재는 값이라 넣지 않는다. 필드 이름과 형은 ToonFaceRig 와 같아야 한다 (RigValuesTests).
+    /// </summary>
+    [Serializable]
+    public class ToonRigValues
+    {
+        public bool outline = true;
+        public float outlineDarkness = 0.35f, outlineThickness = 1f, noseLineFade = 0f;
+        public float linePosition = -0.2f, chinTilt = 1f, chinBend = 0.35f, lineSoftness = 0.015f, rim = 0.3f;
+        public bool urpLighting = false;
+        public float faceReceiveShadows = 0f, bodyReceiveShadows = 1f;
+        public Color skinShadow = ToonFaceRig.DefaultSkinShadow;
+        public float bodyShadow = 0.35f;
+        public Color bodyShadowColor = ToonFaceRig.DefaultSkinShadow;
+
+        public static ToonRigValues From(ToonFaceRig r)
+        {
+            return new ToonRigValues
+            {
+                outline = r.outline, outlineDarkness = r.outlineDarkness, outlineThickness = r.outlineThickness, noseLineFade = r.noseLineFade,
+                linePosition = r.linePosition, chinTilt = r.chinTilt, chinBend = r.chinBend, lineSoftness = r.lineSoftness, rim = r.rim,
+                urpLighting = r.urpLighting, faceReceiveShadows = r.faceReceiveShadows, bodyReceiveShadows = r.bodyReceiveShadows,
+                skinShadow = r.skinShadow, bodyShadow = r.bodyShadow, bodyShadowColor = r.bodyShadowColor
+            };
+        }
+
+        public void ApplyTo(ToonFaceRig r)
+        {
+            r.outline = outline; r.outlineDarkness = outlineDarkness; r.outlineThickness = outlineThickness; r.noseLineFade = noseLineFade;
+            r.linePosition = linePosition; r.chinTilt = chinTilt; r.chinBend = chinBend; r.lineSoftness = lineSoftness; r.rim = rim;
+            r.urpLighting = urpLighting; r.faceReceiveShadows = faceReceiveShadows; r.bodyReceiveShadows = bodyReceiveShadows;
+            r.skinShadow = skinShadow; r.bodyShadow = bodyShadow; r.bodyShadowColor = bodyShadowColor;
+        }
     }
 }

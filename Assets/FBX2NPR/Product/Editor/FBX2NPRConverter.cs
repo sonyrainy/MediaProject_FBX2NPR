@@ -515,6 +515,14 @@ namespace FBX2NPR.EditorTools
                     rig.innerLineFade = new Vector2(fh / InnerLineFadeStartPx, fh / InnerLineFadeEndPx);
                     rep.lines.Add(string.Format(CultureInfo.InvariantCulture, "얼굴 안쪽 선: 얼굴 메시의 머리 영역 높이({0:F3}m)가 화면에서 {1:F0}픽셀보다 작아지면 얼굴 정점의 안쪽 선을 지우기 시작해 {2:F0}픽셀에서 다 지움 (몸의 선은 그대로)", fh, InnerLineFadeStartPx, InnerLineFadeEndPx));
                 }
+                // 인스펙터에서 저장한 조정값이 있으면 자동값 대신 넣는다 (다시 변환해도 사용자가 맞춘 값이 남게)
+                if (crit.toonRigSaved && crit.toonRig != null)
+                {
+                    float autoLine = rig.linePosition;
+                    crit.toonRig.ApplyTo(rig);
+                    rep.lines.Add(string.Format(CultureInfo.InvariantCulture, "저장된 조정값 적용 (모델 설정): 명암선 위치 {0:F2} (자동값 {1:F2}), 턱선 기울기 {2:F2}, 외곽선 진하기 {3:F2}·두께 {4:F1}, 코 둘레 선 지우기 {5:F2}",
+                        rig.linePosition, autoLine, rig.chinTilt, rig.outlineDarkness, rig.outlineThickness, rig.noseLineFade));
+                }
                 rep.lines.Add("리그 위치: " + (headBone != null ? "머리 본 '" + headBone.name + "' 아래" : "머리 본을 못 찾아 루트 아래 (머리를 따라 움직이지 않음)"));
 
                 // ---- 애니메이션: 원본 모델에 Animator 가 없으면 붙여 둔다 (컨트롤러만 넣으면 재생된다)
@@ -531,7 +539,8 @@ namespace FBX2NPR.EditorTools
                 PrefabUtility.SaveAsPrefabAsset(inst, prefabPath, out ok);   // 같은 경로면 덮어쓴다 (GUID 유지)
                 if (!ok) { rep.lines.Add("프리팹 저장 실패: " + prefabPath); return rep; }
                 rep.prefabPath = prefabPath;
-                rep.lines.Add("프리팹: " + prefabPath + (existed ? " (기존 프리팹을 덮어씀. 리그 값은 변환 도구 기본값으로 돌아갑니다)" : ""));
+                rep.lines.Add("프리팹: " + prefabPath + (!existed ? "" : crit.toonRigSaved ? " (기존 프리팹을 덮어씀. 리그 값은 모델 설정에 저장한 조정값으로)"
+                                                                          : " (기존 프리팹을 덮어씀. 리그 값은 변환 도구 기본값으로 돌아갑니다 — 유지하려면 리그 인스펙터에서 '지금 값을 저장')"));
 
                 // ---- 저장에 성공한 뒤에만, 이번에 쓰지 않은 예전 메시·재질·평탄화 텍스처를 정리한다
                 // 지난 변환이 리그에 적어 둔 목록(GUID)에 있는 에셋만 지운다. 사용자가 같은 폴더에 만들거나 복제해 둔 것은 목록에 없으므로 건드리지 않는다.
