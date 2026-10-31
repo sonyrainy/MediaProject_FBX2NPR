@@ -161,6 +161,51 @@ namespace FBX2NPR.EditorTools
                         { s.toonRigSaved = false; RigEditorUtil.SaveSettings(modelPath, s); GUIUtility.ExitGUI(); }
                 }
 
+                // 자동 노멀을 블렌더에서 손으로 다듬어 가져오는 왕복 (FaceNormalRoundTrip). 메시는 유니티에 두고 얼굴 노멀만 OBJ 로 주고받는다.
+                RigEditorUtil.Header("블렌더에서 얼굴 노멀 다듬기 (OBJ 왕복)");
+                var edit = FaceNormalEdit.LoadFor(modelPath);
+                EditorGUILayout.LabelField(edit == null ? "다듬은 노멀 없음: 자동(방사형) 노멀을 씁니다."
+                                         : "다듬은 노멀 있음: 정점 " + edit.VertexTotal + "개. 다시 변환해도 이 노멀이 들어갑니다.", EditorStyles.wordWrappedMiniLabel);
+                using (new EditorGUILayout.HorizontalScope())
+                {
+                    if (GUILayout.Button(new GUIContent("블렌더로 보내기", "얼굴 영역을 OBJ 로 저장합니다. 블렌더에서 File > Import > Wavefront (.obj) 로 열어 노멀만 다듬고, File > Export > Wavefront (.obj) 로 내보내세요 (축·크기 기본값, 노멀 켬).")))
+                    {
+                        Directory.CreateDirectory(FaceNormalRoundTrip.DefaultFolder);
+                        string path = EditorUtility.SaveFilePanel("얼굴 노멀 OBJ 저장", FaceNormalRoundTrip.DefaultFolder, Path.GetFileNameWithoutExtension(modelPath) + "_face", "obj");
+                        if (!string.IsNullOrEmpty(path))
+                        {
+                            string done = FaceNormalRoundTrip.Export(rig, path);
+                            EditorUtility.DisplayDialog("FBX2NPR", done != null ? done + "\n\n블렌더에서 노멀만 다듬고 같은 설정으로 OBJ 를 내보낸 뒤 '다듬은 노멀 불러오기'를 누르세요. 정점을 더하거나 지우면 불러올 수 없습니다." : "내보낼 얼굴 메시가 없습니다.", "확인");
+                        }
+                        GUIUtility.ExitGUI();
+                    }
+                    if (GUILayout.Button(new GUIContent("다듬은 노멀 불러오기", "블렌더에서 내보낸 OBJ 의 노멀을 원본 모델 옆에 저장하고, 다시 변환해 이 인스턴스를 교체합니다.")))
+                    {
+                        string path = EditorUtility.OpenFilePanel("다듬은 얼굴 노멀 OBJ", FaceNormalRoundTrip.DefaultFolder, "obj");
+                        if (!string.IsNullOrEmpty(path))
+                        {
+                            var res = FaceNormalRoundTrip.Read(rig, path);
+                            string msg = string.Join("\n", res.lines.ToArray());
+                            if (res.error != null) EditorUtility.DisplayDialog("FBX2NPR", "불러오지 않았습니다: " + res.error + (msg.Length > 0 ? "\n\n" + msg : ""), "확인");
+                            else if (res.entries.Count == 0) EditorUtility.DisplayDialog("FBX2NPR", "바뀐 노멀이 없습니다.\n\n" + msg, "확인");
+                            else
+                            {
+                                FaceNormalRoundTrip.Save(modelPath, res.entries);
+                                EditorUtility.DisplayDialog("FBX2NPR", msg + "\n\n" + FaceNormalEdit.PathFor(modelPath) + " 에 저장했습니다. 다시 변환해 교체합니다.", "확인");
+                                RigEditorUtil.SwitchStyle(rig, modelPath, FBX2NPRStyle.SubcultureToon);
+                            }
+                        }
+                        GUIUtility.ExitGUI();
+                    }
+                    using (new EditorGUI.DisabledScope(edit == null))
+                        if (GUILayout.Button(new GUIContent("다듬은 노멀 지우기", "저장한 노멀을 지우고 다시 변환해 자동(방사형) 노멀로 돌아갑니다.")))
+                        {
+                            if (EditorUtility.DisplayDialog("FBX2NPR", "블렌더에서 다듬은 노멀(" + FaceNormalEdit.PathFor(modelPath) + ")을 지우고 다시 변환할까요?", "지우고 다시 변환", "취소"))
+                            { FaceNormalRoundTrip.Clear(modelPath); RigEditorUtil.SwitchStyle(rig, modelPath, FBX2NPRStyle.SubcultureToon); }
+                            GUIUtility.ExitGUI();
+                        }
+                }
+
                 RigEditorUtil.Header("텍스처에 굽는 값 (바꾸면 다시 변환)");
                 EditorGUI.BeginChangeCheck();
                 bool flat = EditorGUILayout.Toggle(new GUIContent("얼굴 피부 평탄화", "켜면 얼굴 피부를 한 색으로 정리하고 이목구비를 다시 그린다(만화 얼굴). 끄면 원래 피부 텍스처를 살리고 명암만 툰으로 넣는다(실사 피부). 이미 깔끔한 그림풍 텍스처는 끄는 편이 낫다(Emma)."), s.flattenFaceSkin);

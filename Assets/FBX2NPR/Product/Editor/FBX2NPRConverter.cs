@@ -207,6 +207,10 @@ namespace FBX2NPR.EditorTools
                     p.mesh.RecalculateTangents();   // 정리한 노멀에 맞는 탄젠트. 노멀맵과 원본 노멀 복원이 같은 축을 쓴다
                     cleaned += p.headCount;
                 }
+                // 블렌더에서 다듬어 불러온 얼굴 노멀이 있으면 방사형 대신 그 노멀을 넣는다 (FaceNormalRoundTrip, 다시 변환해도 유지). 원본 노멀은 아래에서 새 노멀 기준으로 UV4 에 굽는다.
+                var normalEdit = FaceNormalEdit.LoadFor(modelPath);
+                if (normalEdit != null)
+                    foreach (var p in parts) { string note = normalEdit.ApplyTo(p.mesh); if (note != null) rep.lines.Add(note); }
                 // 원본 노멀을 지금 노멀·탄젠트 기준(탄젠트 공간)으로 UV4 에 싣는다. 스키닝이 노멀·탄젠트를 돌리면 함께 돈다 (OriginalNormals).
                 foreach (var p in parts) OriginalNormals.Write(p.mesh, p.origN);
 
@@ -737,7 +741,7 @@ namespace FBX2NPR.EditorTools
         /// 스킨 메시의 메시 좌표 → 지금 자세의 월드. 머리 본이 이 메시의 본 목록에 있으면 그 본으로, 없으면 첫 본으로 구한다.
         /// 메시 오브젝트의 트랜스폼과 사실상 같으면(차이 1e-4 이하) 트랜스폼을 그대로 쓴다. diff 는 두 행렬 원소의 가장 큰 차이.
         /// </summary>
-        static Matrix4x4 BindToWorld(SkinnedMeshRenderer smr, Mesh mesh, Transform headBone, out float diff)
+        internal static Matrix4x4 BindToWorld(SkinnedMeshRenderer smr, Mesh mesh, Transform headBone, out float diff)
         {
             var own = smr.transform.localToWorldMatrix; diff = 0f;
             var bones = smr.bones; var bp = mesh.bindposes; int pick = -1;
