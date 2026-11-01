@@ -206,6 +206,8 @@ namespace FBX2NPR.EditorTools
             var imp = AssetImporter.GetAtPath(path);
             var crit = FBX2NPRAssetSettings.FromJson(imp != null ? imp.userData : null) ?? new FBX2NPRAssetSettings();
             L("  얼굴 판정 규칙: 재질 포함=[" + crit.faceMaterialContains + "] 메시 제외=[" + crit.excludeMeshContains + "]" + (imp != null && !string.IsNullOrEmpty(imp.userData) ? " (meta userData)" : " (기본값)"));
+            // 스킨 메시의 좌표 → 지금 자세의 월드는 변환기와 같은 행렬로 (메시 오브젝트 트랜스폼과 '본 x 바인드 포즈'가 다른 모델: Galaxia)
+            var headBone = FBX2NPRConverter.FindHeadBone(inst.transform, crit.headBoneContains);
 
             // UV3 점유 확인 (원본 노멀을 심을 자리)
             bool uv3Dup = true, uv3Any = false;
@@ -218,7 +220,7 @@ namespace FBX2NPR.EditorTools
                 p.name = src.name;
                 p.mesh = UnityEngine.Object.Instantiate(src);
                 p.origN = p.mesh.normals;
-                p.l2w = smr.transform.localToWorldMatrix;
+                float bindDiff; p.l2w = FBX2NPRConverter.BindToWorld(smr, src, headBone, out bindDiff);
                 p.albedo = ResolveAlbedo(smr.sharedMaterial, path, crit);
 
                 var uv0 = new List<Vector4>(); var uv3 = new List<Vector4>();
