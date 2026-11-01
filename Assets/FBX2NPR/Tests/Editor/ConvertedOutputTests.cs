@@ -39,16 +39,17 @@ namespace FBX2NPR.Tests
                     var os = new List<Vector3>(); m.GetUVs(3, os);
                     var n = m.normals; var t = m.tangents;
                     Assert.That(t.Length, Is.EqualTo(n.Length), pf.name + "/" + m.name + ": 탄젠트가 없습니다.");
-                    float worst = 0f; int parallel = 0;
+                    float worst = 0f; int bad = 0;
                     for (int i = 0; i < n.Length; i++)
                     {
                         worst = Mathf.Max(worst, Vector3.Angle(os[i], OriginalNormals.Decode(ts[i], n[i], t[i])));
-                        if (Mathf.Abs(Vector3.Dot(n[i].normalized, ((Vector3)t[i]).normalized)) > 0.9f) parallel++;
+                        Vector3 tv = t[i];
+                        if (tv.sqrMagnitude < 0.25f || Mathf.Abs(Vector3.Dot(n[i].normalized, tv.normalized)) > 0.01f) bad++;
                     }
                     Assert.That(worst, Is.LessThan(0.05f), pf.name + "/" + m.name + ": UV4 를 되돌린 원본 노멀이 UV3 과 다릅니다 (최대 각도).");
-                    // 예전 방식(탄젠트 자리에 원본 노멀)이면 정리하지 않은 정점 거의 전부에서 탄젠트가 노멀과 평행하다.
-                    // 임포트한 탄젠트도 UV 가 찌그러진 몇 정점에서는 평행할 수 있어 비율로 본다.
-                    Assert.That(parallel, Is.LessThan(n.Length * 0.01f), pf.name + "/" + m.name + ": 탄젠트가 노멀과 평행한 정점이 너무 많습니다 (예전처럼 원본 노멀이 들어 있는지 확인).");
+                    // 변환 도구는 노멀에 직교하지 않는 탄젠트(UV 가 한 점에 뭉친 곳에 임포터가 남긴 기본값 등)를 고쳐 넣는다 (OriginalNormals.Write).
+                    // 예전 방식(탄젠트 자리에 원본 노멀)이면 거의 모든 정점에서 걸린다.
+                    Assert.That(bad, Is.EqualTo(0), pf.name + "/" + m.name + ": 탄젠트가 없거나 노멀에 직교하지 않는 정점이 있습니다 (탄젠트를 고치기 전에 변환한 결과면 다시 변환, 아니면 예전처럼 원본 노멀이 들어 있는지 확인).");
                     meshes++;
                 }
             if (meshes == 0) Assert.Ignore("원본 노멀을 UV4 에 실은 변환 결과가 없습니다 (" + FBX2NPRConverter.OutRoot + ", 다시 변환 필요)");

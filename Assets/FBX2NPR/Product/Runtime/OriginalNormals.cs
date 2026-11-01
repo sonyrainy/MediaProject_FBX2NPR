@@ -46,14 +46,38 @@ namespace FBX2NPR
             return (ts.x * tt + ts.y * b + ts.z * n).normalized;
         }
 
-        /// <summary>메시의 지금 노멀·탄젠트를 기준으로 원본 노멀을 UV4 에 싣습니다. 노멀을 다 정리한 뒤에 불러야 합니다. 탄젠트가 없으면 지금 노멀로 계산합니다.</summary>
+        /// <summary>메시의 지금 노멀·탄젠트를 기준으로 원본 노멀을 UV4 에 싣습니다. 노멀을 다 정리한 뒤에 불러야 합니다. 탄젠트가 없으면 지금 노멀로 계산합니다.
+        /// 노멀에 직교하지 않는 탄젠트는 되돌릴 때와 같은 축(Frame)으로 고쳐 다시 넣습니다. UV 가 한 점에 뭉친 곳(머리핀 같은 작은 장신구, 머리카락 일부)에서는
+        /// 임포터가 탄젠트를 구하지 못해 기본값 (1,0,0)을 남기는데, 그대로 두면 노멀맵과 다른 셰이더의 탄젠트 축이 비뚤어집니다. UV4 값은 고치기 전과 같습니다.</summary>
         public static void Write(Mesh mesh, Vector3[] orig)
         {
             var n = mesh.normals; var t = mesh.tangents;
             if (t == null || t.Length != n.Length) { mesh.RecalculateTangents(); t = mesh.tangents; }
+            if (t == null || t.Length != n.Length) t = new Vector4[n.Length];   // 탄젠트를 못 구한 메시: 아래에서 전부 고친다
             var ts = new Vector3[n.Length];
-            for (int i = 0; i < n.Length; i++) ts[i] = Encode(orig[i], n[i], i < t.Length ? t[i] : Vector4.zero);
+            bool repaired = false;
+            for (int i = 0; i < n.Length; i++)
+            {
+                if (NeedsRepair(n[i], t[i])) { t[i] = Repair(n[i], t[i]); repaired = true; }
+                ts[i] = Encode(orig[i], n[i], t[i]);
+            }
+            if (repaired) mesh.tangents = t;
             mesh.SetUVs(Channel, ts);
+        }
+
+        // 노멀에 직교하는 단위 탄젠트이고 w 가 ±1 이면 그대로 둔다 (임포터와 RecalculateTangents 가 제대로 구한 탄젠트는 건드리지 않는다)
+        static bool NeedsRepair(Vector3 normal, Vector4 t)
+        {
+            Vector3 tv = t; float len = tv.magnitude;
+            if (Mathf.Abs(len - 1f) > 1e-3f || Mathf.Abs(Mathf.Abs(t.w) - 1f) > 1e-3f) return true;
+            return Mathf.Abs(Vector3.Dot(normal.normalized, tv / len)) > 1e-3f;
+        }
+
+        static Vector4 Repair(Vector3 normal, Vector4 t)
+        {
+            Vector3 tt, b;
+            Frame(normal.normalized, t, out tt, out b);
+            return new Vector4(tt.x, tt.y, tt.z, t.w < 0f ? -1f : 1f);
         }
     }
 }
