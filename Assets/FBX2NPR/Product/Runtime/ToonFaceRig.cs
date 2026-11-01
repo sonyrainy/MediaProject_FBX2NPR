@@ -140,16 +140,41 @@ namespace FBX2NPR
         void OnEnable() { ApplyOutline(); Apply(); }
         void OnValidate() { if (isActiveAndEnabled && gameObject.scene.IsValid()) { ApplyOutline(); Apply(); } }   // 프리팹 에셋 자체(씬 밖)에서는 넣을 대상이 없다
         void Update() { if (!Application.isPlaying) Apply(); }       // 편집 모드: 씬이 바뀔 때(표식 이동 등)만 불린다
-        void LateUpdate() { if (Application.isPlaying) Apply(); }    // 플레이 중: Animator 가 본을 움직인 뒤에 넣어야 얼굴 명암이 한 프레임 늦지 않는다
+        void LateUpdate() { if (Application.isPlaying) ApplyFrame(); }   // 플레이 중: Animator 가 본을 움직인 뒤에 넣어야 얼굴 명암이 한 프레임 늦지 않는다
+
+        // 셰이더 프로퍼티 ID. 문자열 이름으로 넣으면 넣을 때마다 이름을 해시로 바꾼다.
+        static class Id
+        {
+            public static readonly int LightDir = Shader.PropertyToID("_LightDir"), UrpLighting = Shader.PropertyToID("_UrpLighting");
+            public static readonly int FaceCurve = Shader.PropertyToID("_FaceCurve"), FaceUp = Shader.PropertyToID("_FaceUp"), FaceForward = Shader.PropertyToID("_FaceForward"), FaceCenter = Shader.PropertyToID("_FaceCenter");
+            public static readonly int CurveStop = Shader.PropertyToID("_CurveStop"), CurveSoft = Shader.PropertyToID("_CurveSoft"), CurveTilt = Shader.PropertyToID("_CurveTilt");
+            public static readonly int ChinScale = Shader.PropertyToID("_ChinScale"), ChinBend = Shader.PropertyToID("_ChinBend");
+            public static readonly int NoseShade = Shader.PropertyToID("_NoseShade"), NoseTip = Shader.PropertyToID("_NoseTip"), NoseRadius = Shader.PropertyToID("_NoseRadius");
+            public static readonly int NoseLineFade = Shader.PropertyToID("_NoseLineFade"), NoseStop = Shader.PropertyToID("_NoseStop"), NoseMoon = Shader.PropertyToID("_NoseMoon");
+            public static readonly int NoseMoonShape = Shader.PropertyToID("_NoseMoonShape"), NoseMoonParam = Shader.PropertyToID("_NoseMoonParam"), NoseMoonExtra = Shader.PropertyToID("_NoseMoonExtra");
+            public static readonly int NosePolyA = Shader.PropertyToID("_NosePolyA"), NosePolyB = Shader.PropertyToID("_NosePolyB"), NosePolyParam = Shader.PropertyToID("_NosePolyParam");
+            public static readonly int EyeAvoid = Shader.PropertyToID("_EyeAvoid"), EyeA = Shader.PropertyToID("_EyeA"), EyeB = Shader.PropertyToID("_EyeB"), EyeRadius = Shader.PropertyToID("_EyeRadius");
+            public static readonly int RimLight = Shader.PropertyToID("_RimLight"), FaceShadowReceive = Shader.PropertyToID("_FaceShadowReceive"), ShadowReceive = Shader.PropertyToID("_ShadowReceive");
+            public static readonly int Band1 = Shader.PropertyToID("_Band1"), NoseDebug = Shader.PropertyToID("_NoseDebug"), Stop2 = Shader.PropertyToID("_Stop2"), InnerLineFade = Shader.PropertyToID("_InnerLineFade");
+        }
 
         // 값을 넣을 곳: 재질 에셋(미리보기 씬) 또는 렌더러별 프로퍼티 블록(변환한 프리팹).
         struct Sink
         {
             public Material m; public MaterialPropertyBlock b;
-            public void F(string n, float v) { if (m != null) m.SetFloat(n, v); else b.SetFloat(n, v); }
-            public void V(string n, Vector4 v) { if (m != null) m.SetVector(n, v); else b.SetVector(n, v); }
+            public void F(int id, float v) { if (m != null) m.SetFloat(id, v); else b.SetFloat(id, v); }
+            public void V(int id, Vector4 v) { if (m != null) m.SetVector(id, v); else b.SetVector(id, v); }
         }
-        MaterialPropertyBlock _block;
+
+        // 렌더러(재질 칸)마다 마지막 Apply 가 넣은 블록. index -1 은 렌더러 전체 블록(재질 칸이 하나인 렌더러).
+        // ApplyFrame 이 여기서 움직이는 값만 바꿔 다시 넣는다.
+        struct Slot { public Renderer r; public int index; public bool face; public MaterialPropertyBlock b; }
+        readonly List<Slot> _slots = new List<Slot>();
+        readonly List<MaterialPropertyBlock> _slotBlocks = new List<MaterialPropertyBlock>();
+        bool _slotsBuilt;
+        int _slotsFaceCount, _slotsOtherCount;
+        float _slotsK, _slotsThick;
+        Vector3 _pushedLight, _pushedUp, _pushedFwd, _pushedCenter, _pushedNose, _pushedEyeA, _pushedEyeB;
         Light _sun;
         float _nextSunSearch;
         Vector3 _lastLight = new Vector3(0.520f, 0.423f, 0.743f);   // 테스트 리그 기본값 (방위 35도, 고도 25도)
@@ -223,23 +248,22 @@ namespace FBX2NPR
             // 미리보기 씬: 표식 하나가 씬 전체의 외곽선을 켜고 끈다. 변환한 프리팹은 ApplyOutline 에서 따로 한다.
             if (outlineFeature != null && !driveOutlineSettings && outlineFeature.isActive != outline) outlineFeature.SetActive(outline);
 
-            foreach (var m in otherMaterials) if (m != null) { m.SetVector("_LightDir", l); m.SetFloat("_UrpLighting", urpLighting ? 1f : 0f); }
+            foreach (var m in otherMaterials) if (m != null) { m.SetVector(Id.LightDir, l); m.SetFloat(Id.UrpLighting, urpLighting ? 1f : 0f); }
             foreach (var m in faceMaterials) { if (m != null) PushFace(new Sink { m = m }, up, fwd, l, 1f); }
 
+            _slots.Clear(); _slotsBuilt = false;
             if (faceRenderers.Count == 0 && otherRenderers.Count == 0) return;
-            if (_block == null) _block = new MaterialPropertyBlock();
             float k = LengthScale();
             var bodyBand = new Vector4(bodyShadowColor.r, bodyShadowColor.g, bodyShadowColor.b, 1f);
             // 안쪽 선이 뭉치는 거리는 선 두께에 비례해 가까워진다 (소벨의 표본 간격이 두께 픽셀)
-            // 두께는 피처에 실제로 들어 있는 값을 읽는다 (다른 리그나 사용자가 바꿨을 수 있다)
-            var sfNow = outlineFeature as SobelOutlineFeature;
-            float thick = (sfNow != null && sfNow.isActive) ? sfNow.settings.thickness : outlineThickness;
+            float thick = OutlineThicknessNow();
             float fadeK = k / Mathf.Max(thick, 1f);
             var fade = new Vector4(innerLineFade.x * fadeK, innerLineFade.y * fadeK, 0f, 0f);
             foreach (var r in otherRenderers)
             {
                 if (r == null) continue;
-                r.GetPropertyBlock(_block); PushBody(_block, l, bodyBand); r.SetPropertyBlock(_block);
+                var b = SlotBlock(r, -1, false);
+                r.GetPropertyBlock(b); PushBody(b, l, bodyBand); r.SetPropertyBlock(b);
             }
             foreach (var r in faceRenderers)
             {
@@ -248,9 +272,10 @@ namespace FBX2NPR
                 if (_slotMats.Count <= 1)
                 {
                     // 얼굴 재질의 _Stop2 는 얼굴 밖(목 아래·손)의 일반 밴드에만 쓰인다. 얼굴 안은 명암선이 정한다.
-                    r.GetPropertyBlock(_block); PushFace(new Sink { b = _block }, up, fwd, l, k); _block.SetFloat("_Stop2", bodyShadow);
-                    _block.SetVector("_InnerLineFade", fade);
-                    r.SetPropertyBlock(_block);
+                    var b = SlotBlock(r, -1, true);
+                    r.GetPropertyBlock(b); PushFace(new Sink { b = b }, up, fwd, l, k); b.SetFloat(Id.Stop2, bodyShadow);
+                    b.SetVector(Id.InnerLineFade, fade);
+                    r.SetPropertyBlock(b);
                     continue;
                 }
                 // 재질 칸이 여럿인 얼굴 메시(얼굴 + 속눈썹 카드 등): 얼굴 재질 칸에만 얼굴 값을, 나머지 칸에는 몸 값을 넣는다.
@@ -258,67 +283,135 @@ namespace FBX2NPR
                 {
                     var sm = _slotMats[mi];
                     bool faceSlot = sm != null && sm.HasProperty("_FaceWeightOn") && sm.GetFloat("_FaceWeightOn") > 0.5f;
-                    r.GetPropertyBlock(_block, mi);
-                    if (faceSlot) { PushFace(new Sink { b = _block }, up, fwd, l, k); _block.SetFloat("_Stop2", bodyShadow); _block.SetVector("_InnerLineFade", fade); }
-                    else PushBody(_block, l, bodyBand);
-                    r.SetPropertyBlock(_block, mi);
+                    var b = SlotBlock(r, mi, faceSlot);
+                    r.GetPropertyBlock(b, mi);
+                    if (faceSlot) { PushFace(new Sink { b = b }, up, fwd, l, k); b.SetFloat(Id.Stop2, bodyShadow); b.SetVector(Id.InnerLineFade, fade); }
+                    else PushBody(b, l, bodyBand);
+                    r.SetPropertyBlock(b, mi);
                 }
             }
+            _slotsBuilt = true; _slotsFaceCount = faceRenderers.Count; _slotsOtherCount = otherRenderers.Count; _slotsK = k; _slotsThick = thick;
+            RememberPushed(l, up, fwd);
         }
+
+        /// <summary>
+        /// 플레이 중 매 프레임 (LateUpdate). 마지막 Apply 가 렌더러(재질 칸)마다 넣어 둔 블록에서 움직이는 값
+        /// (빛 방향, 얼굴의 위·앞 방향, 얼굴 중심·코끝·눈 위치)만 바꿔 다시 넣고, 움직인 것이 없으면 아무것도 하지 않는다.
+        /// 나머지 값(슬라이더, 색, 코 도형)은 Apply 때만 넣는다: 스크립트로 값을 바꾸면 Apply() 를 불러야 한다 (인스펙터는 OnValidate 가 부른다).
+        /// 재질 에셋 경로(미리보기 씬)이거나, 렌더러 목록·프리팹 배율·외곽선 두께가 바뀌었으면 Apply 로 넘긴다.
+        /// 2026-11-01 빌드 측정에서 캐릭터 30명일 때 매 프레임 Apply 가 0.63 ms 였다 (문자열 프로퍼티 이름, 블록 읽기, 안 바뀌는 값 30여 개).
+        /// </summary>
+        public void ApplyFrame()
+        {
+            if (faceMaterials.Count > 0 || otherMaterials.Count > 0 || !SlotsValid()) { Apply(); return; }
+            if (outlineFeature != null && !driveOutlineSettings && outlineFeature.isActive != outline) outlineFeature.SetActive(outline);
+            Vector3 up = transform.up, fwd = transform.forward, l = LightDirection();
+            Vector3 c = faceCenter != null ? faceCenter.position : Vector3.zero, n = noseTip != null ? noseTip.position : Vector3.zero;
+            Vector3 ea = eyeA != null ? eyeA.position : Vector3.zero, eb = eyeB != null ? eyeB.position : Vector3.zero;
+            if (Same(l, _pushedLight) && Same(up, _pushedUp) && Same(fwd, _pushedFwd) && Same(c, _pushedCenter) && Same(n, _pushedNose) && Same(ea, _pushedEyeA) && Same(eb, _pushedEyeB)) return;
+            for (int i = 0; i < _slots.Count; i++)
+            {
+                var s = _slots[i];
+                s.b.SetVector(Id.LightDir, l);
+                if (s.face)
+                {
+                    s.b.SetVector(Id.FaceUp, up); s.b.SetVector(Id.FaceForward, fwd);
+                    if (faceCenter != null) s.b.SetVector(Id.FaceCenter, c);
+                    if (noseTip != null) s.b.SetVector(Id.NoseTip, n);
+                    if (eyeA != null) s.b.SetVector(Id.EyeA, ea);
+                    if (eyeB != null) s.b.SetVector(Id.EyeB, eb);
+                }
+                if (s.index < 0) s.r.SetPropertyBlock(s.b); else s.r.SetPropertyBlock(s.b, s.index);
+            }
+            RememberPushed(l, up, fwd);
+        }
+
+        MaterialPropertyBlock SlotBlock(Renderer r, int index, bool face)
+        {
+            int i = _slots.Count;
+            if (_slotBlocks.Count <= i) _slotBlocks.Add(new MaterialPropertyBlock());
+            var b = _slotBlocks[i];
+            _slots.Add(new Slot { r = r, index = index, face = face, b = b });
+            return b;
+        }
+
+        bool SlotsValid()
+        {
+            if (!_slotsBuilt || faceRenderers.Count != _slotsFaceCount || otherRenderers.Count != _slotsOtherCount) return false;
+            for (int i = 0; i < _slots.Count; i++) if (_slots[i].r == null) return false;
+            return LengthScale() == _slotsK && OutlineThicknessNow() == _slotsThick;
+        }
+
+        // 두께는 피처에 실제로 들어 있는 값을 읽는다 (다른 리그나 사용자가 바꿨을 수 있다)
+        float OutlineThicknessNow()
+        {
+            var sfNow = outlineFeature as SobelOutlineFeature;
+            return (sfNow != null && sfNow.isActive) ? sfNow.settings.thickness : outlineThickness;
+        }
+
+        void RememberPushed(Vector3 l, Vector3 up, Vector3 fwd)
+        {
+            _pushedLight = l; _pushedUp = up; _pushedFwd = fwd;
+            _pushedCenter = faceCenter != null ? faceCenter.position : Vector3.zero; _pushedNose = noseTip != null ? noseTip.position : Vector3.zero;
+            _pushedEyeA = eyeA != null ? eyeA.position : Vector3.zero; _pushedEyeB = eyeB != null ? eyeB.position : Vector3.zero;
+        }
+
+        static bool Same(Vector3 a, Vector3 b) { return a.x == b.x && a.y == b.y && a.z == b.z; }   // Vector3 == 는 1e-5 안을 같다고 본다
 
         void PushBody(MaterialPropertyBlock b, Vector3 l, Vector4 bodyBand)
         {
-            b.SetVector("_LightDir", l); b.SetFloat("_Stop2", bodyShadow); b.SetVector("_Band1", bodyBand);
-            b.SetFloat("_UrpLighting", urpLighting ? 1f : 0f); b.SetFloat("_ShadowReceive", bodyReceiveShadows);
+            b.SetVector(Id.LightDir, l); b.SetFloat(Id.Stop2, bodyShadow); b.SetVector(Id.Band1, bodyBand);
+            b.SetFloat(Id.UrpLighting, urpLighting ? 1f : 0f); b.SetFloat(Id.ShadowReceive, bodyReceiveShadows);
         }
 
         // k: 길이 배율. 재질 에셋 경로(미리보기 씬)는 늘 1, 변환한 프리팹은 인스턴스의 배율.
+        // 위치·방향 값(_LightDir, _FaceUp, _FaceForward, _FaceCenter, _NoseTip, _EyeA, _EyeB)은 ApplyFrame 도 넣는다. 여기에 위치·방향 값을 더하면 거기에도 더할 것.
         void PushFace(Sink s, Vector3 up, Vector3 fwd, Vector3 l, float k)
         {
-            s.V("_LightDir", l);
-            s.F("_FaceCurve", 1f);
-            s.V("_FaceUp", up);
-            s.V("_FaceForward", fwd);
-            if (faceCenter != null) s.V("_FaceCenter", faceCenter.position);
-            s.F("_CurveStop", linePosition);
-            s.F("_CurveSoft", lineSoftness);
-            s.F("_CurveTilt", chinTilt);
-            s.F("_ChinScale", chinScale * k);
-            s.F("_ChinBend", chinBend);
+            s.V(Id.LightDir, l);
+            s.F(Id.FaceCurve, 1f);
+            s.V(Id.FaceUp, up);
+            s.V(Id.FaceForward, fwd);
+            if (faceCenter != null) s.V(Id.FaceCenter, faceCenter.position);
+            s.F(Id.CurveStop, linePosition);
+            s.F(Id.CurveSoft, lineSoftness);
+            s.F(Id.CurveTilt, chinTilt);
+            s.F(Id.ChinScale, chinScale * k);
+            s.F(Id.ChinBend, chinBend);
 
-            s.F("_NoseShade", (noseShadow && noseTip != null) ? noseStrength : 0f);
-            if (noseTip != null) s.V("_NoseTip", noseTip.position);
-            s.V("_NoseRadius", noseRadius * k);
-            s.F("_NoseLineFade", noseTip != null ? noseLineFade : 0f);
-            s.F("_NoseStop", noseThreshold);
-            s.F("_NoseMoon", (noseShadow && noseHalfMoon && noseTip != null) ? 1f : 0f);
-            s.V("_NoseMoonShape", (noseFigure == NoseFigure.Crescent ? StretchedMoonShape() : moonShape) * k);
-            s.V("_NoseMoonParam", new Vector4(moonParam.x, moonParam.y * k, moonThickness, (float)(int)noseFigure));
-            s.V("_NoseMoonExtra", new Vector4(moonBulge, 0f, 0f, 0f));
+            s.F(Id.NoseShade, (noseShadow && noseTip != null) ? noseStrength : 0f);
+            if (noseTip != null) s.V(Id.NoseTip, noseTip.position);
+            s.V(Id.NoseRadius, noseRadius * k);
+            s.F(Id.NoseLineFade, noseTip != null ? noseLineFade : 0f);
+            s.F(Id.NoseStop, noseThreshold);
+            s.F(Id.NoseMoon, (noseShadow && noseHalfMoon && noseTip != null) ? 1f : 0f);
+            s.V(Id.NoseMoonShape, (noseFigure == NoseFigure.Crescent ? StretchedMoonShape() : moonShape) * k);
+            s.V(Id.NoseMoonParam, new Vector4(moonParam.x, moonParam.y * k, moonThickness, (float)(int)noseFigure));
+            s.V(Id.NoseMoonExtra, new Vector4(moonBulge, 0f, 0f, 0f));
             if (noseFigure == NoseFigure.Teardrop)
             {
                 Vector4 da, dr;
                 DropParams(dropA, dropR, dropScale, dropLength, out da, out dr);
-                s.V("_NosePolyA", da * k); s.V("_NosePolyParam", dr * k);
+                s.V(Id.NosePolyA, da * k); s.V(Id.NosePolyParam, dr * k);
             }
             if (noseFigure == NoseFigure.RoundedQuad)
             {
                 Vector4 sa, sb, sp;   // 둥근 사다리꼴 셰이더 값
                 RoundQuadParams(quadA, quadB, quadRound, out sa, out sb, out sp);
-                s.V("_NosePolyA", sa * k); s.V("_NosePolyB", sb * k); s.V("_NosePolyParam", sp * k);
+                s.V(Id.NosePolyA, sa * k); s.V(Id.NosePolyB, sb * k); s.V(Id.NosePolyParam, sp * k);
             }
 
-            s.F("_EyeAvoid", (avoidEyes && eyeA != null && eyeB != null) ? eyeAvoidStrength : 0f);
-            if (eyeA != null) s.V("_EyeA", eyeA.position);
-            if (eyeB != null) s.V("_EyeB", eyeB.position);
-            s.V("_EyeRadius", new Vector4(eyeRadius.x, eyeRadius.y, eyeRadius.z, 0f) * k);
+            s.F(Id.EyeAvoid, (avoidEyes && eyeA != null && eyeB != null) ? eyeAvoidStrength : 0f);
+            if (eyeA != null) s.V(Id.EyeA, eyeA.position);
+            if (eyeB != null) s.V(Id.EyeB, eyeB.position);
+            s.V(Id.EyeRadius, new Vector4(eyeRadius.x, eyeRadius.y, eyeRadius.z, 0f) * k);
 
-            s.F("_RimLight", rim);
-            s.F("_UrpLighting", urpLighting ? 1f : 0f);
-            s.F("_FaceShadowReceive", faceReceiveShadows);
-            s.F("_ShadowReceive", bodyReceiveShadows);   // 얼굴 재질 안의 목 아래·손 (얼굴 가중치 밖)
-            s.V("_Band1", new Vector4(skinShadow.r, skinShadow.g, skinShadow.b, 1f));
-            s.F("_NoseDebug", showRegions ? 1f : 0f);
+            s.F(Id.RimLight, rim);
+            s.F(Id.UrpLighting, urpLighting ? 1f : 0f);
+            s.F(Id.FaceShadowReceive, faceReceiveShadows);
+            s.F(Id.ShadowReceive, bodyReceiveShadows);   // 얼굴 재질 안의 목 아래·손 (얼굴 가중치 밖)
+            s.V(Id.Band1, new Vector4(skinShadow.r, skinShadow.g, skinShadow.b, 1f));
+            s.F(Id.NoseDebug, showRegions ? 1f : 0f);
         }
 
         void OnDrawGizmosSelected()
