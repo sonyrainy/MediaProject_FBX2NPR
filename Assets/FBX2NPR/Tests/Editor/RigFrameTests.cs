@@ -47,11 +47,13 @@ namespace FBX2NPR.Tests
         }
 
         // 테스트용 캐릭터: 머리 아래 리그·코끝·눈·얼굴 중심, 렌더러 셋 (칸 하나 얼굴, 칸 둘 얼굴, 몸)
-        ToonFaceRig NewCharacter(out Transform head, out Transform light)
+        // instances: 플레이 중 경로(렌더러마다 재질 사본)로 시험
+        ToonFaceRig NewCharacter(out Transform head, out Transform light, bool instances = false)
         {
             var root = Go("character"); root.SetActive(false);   // 다 채운 뒤 켜서 OnEnable(Apply) 이 한 번 돌게
             head = Go("head", root.transform).transform;
             var rig = Go("rig", head).AddComponent<ToonFaceRig>();
+            rig.instancesInEditMode = instances;
             light = Go("light").transform; light.rotation = Quaternion.Euler(30f, -140f, 0f);
             rig.lightTransform = light;
             rig.noseTip = Go("nose", head).transform; rig.noseTip.localPosition = new Vector3(0f, 0.05f, 0.1f);
@@ -78,6 +80,22 @@ namespace FBX2NPR.Tests
                     if (slots <= 1) r.GetPropertyBlock(b); else r.GetPropertyBlock(b, i);
                     foreach (var p in Floats) got[r.name + "/" + i + "/" + p] = new Vector4(b.GetFloat(p), 0f, 0f, 0f);
                     foreach (var p in Vectors) got[r.name + "/" + i + "/" + p] = b.GetVector(p);
+                }
+            }
+            return got;
+        }
+
+        static Dictionary<string, Vector4> CaptureMaterials(ToonFaceRig rig)
+        {
+            var got = new Dictionary<string, Vector4>();
+            var all = new List<Renderer>(rig.faceRenderers); all.AddRange(rig.otherRenderers);
+            foreach (var r in all)
+            {
+                var mats = r.sharedMaterials;
+                for (int i = 0; i < mats.Length; i++)
+                {
+                    foreach (var p in Floats) got[r.name + "/" + i + "/" + p] = new Vector4(mats[i].GetFloat(p), 0f, 0f, 0f);
+                    foreach (var p in Vectors) got[r.name + "/" + i + "/" + p] = mats[i].GetVector(p);
                 }
             }
             return got;
@@ -127,6 +145,35 @@ namespace FBX2NPR.Tests
             rig.ApplyFrame();
             var b = new MaterialPropertyBlock(); added.GetPropertyBlock(b);
             Assert.That(b.GetVector("_LightDir").sqrMagnitude, Is.GreaterThan(0.5f), "새로 넣은 렌더러에도 값이 들어가야 한다");
+        }
+
+        // 플레이 중 경로: 렌더러마다 재질 사본을 쓰고 블록은 비운다(블록이 걸리면 SRP Batcher 를 못 탄다).
+        // 머리와 빛을 움직인 뒤 ApplyFrame 이 남긴 재질 값은 바로 이어서 Apply 한 값과 같아야 하고, 리그가 없어지면 원래 재질로 돌아가야 한다.
+        [Test]
+        public void PlayModeUsesMaterialCopiesWithoutBlocks()
+        {
+            Transform head, light;
+            var rig = NewCharacter(out head, out light, instances: true);
+            var all = new List<Renderer>(rig.faceRenderers); all.AddRange(rig.otherRenderers);
+            var copies = new List<Material>();
+            foreach (var r in all)
+            {
+                Assert.That(r.HasPropertyBlock(), Is.False, r.name + ": 블록이 없어야 합니다.");
+                foreach (var m in r.sharedMaterials) { Assert.That(made.Contains(m), Is.False, r.name + ": 원래 재질이 아니라 사본이어야 합니다."); copies.Add(m); }
+            }
+
+            head.SetPositionAndRotation(new Vector3(0.1f, 1.5f, -0.2f), Quaternion.Euler(5f, 25f, -8f));
+            light.rotation = Quaternion.Euler(20f, 160f, 0f);
+            rig.ApplyFrame();
+            var afterFrame = CaptureMaterials(rig);
+            Assert.That(afterFrame["face/0/_FaceUp"], Is.Not.EqualTo(new Vector4(0f, 1f, 0f, 0f)), "머리 방향이 실제로 바뀌었는지");
+            rig.Apply();
+            AssertSameBlocks(CaptureMaterials(rig), afterFrame);
+            foreach (var r in all) Assert.That(r.HasPropertyBlock(), Is.False, r.name + ": Apply 뒤에도 블록이 없어야 합니다.");
+
+            Object.DestroyImmediate(rig);
+            foreach (var r in all) foreach (var m in r.sharedMaterials) Assert.That(made.Contains(m), Is.True, r.name + ": 원래 재질로 돌아가야 합니다.");
+            foreach (var m in copies) Assert.That(m == null, Is.True, "사본은 지워져야 합니다.");
         }
     }
 }

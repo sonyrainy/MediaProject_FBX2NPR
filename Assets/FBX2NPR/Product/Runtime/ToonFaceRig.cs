@@ -158,7 +158,7 @@ namespace FBX2NPR
             public static readonly int Band1 = Shader.PropertyToID("_Band1"), NoseDebug = Shader.PropertyToID("_NoseDebug"), Stop2 = Shader.PropertyToID("_Stop2"), InnerLineFade = Shader.PropertyToID("_InnerLineFade");
         }
 
-        // 값을 넣을 곳: 재질 에셋(미리보기 씬) 또는 렌더러별 프로퍼티 블록(변환한 프리팹).
+        // 값을 넣을 곳: 재질 에셋(미리보기 씬), 렌더러별 재질 사본(변환한 프리팹, 플레이 중), 렌더러별 프로퍼티 블록(변환한 프리팹, 편집 모드).
         struct Sink
         {
             public Material m; public MaterialPropertyBlock b;
@@ -166,11 +166,21 @@ namespace FBX2NPR
             public void V(int id, Vector4 v) { if (m != null) m.SetVector(id, v); else b.SetVector(id, v); }
         }
 
-        // 렌더러(재질 칸)마다 마지막 Apply 가 넣은 블록. index -1 은 렌더러 전체 블록(재질 칸이 하나인 렌더러).
+        // 렌더러(재질 칸)마다 마지막 Apply 가 값을 넣은 곳. 플레이 중에는 재질 사본(m), 편집 모드는 블록(b, index -1 은 렌더러 전체 블록).
         // ApplyFrame 이 여기서 움직이는 값만 바꿔 다시 넣는다.
-        struct Slot { public Renderer r; public int index; public bool face; public MaterialPropertyBlock b; }
+        struct Slot { public Renderer r; public int index; public bool face; public MaterialPropertyBlock b; public Material m; }
         readonly List<Slot> _slots = new List<Slot>();
         readonly List<MaterialPropertyBlock> _slotBlocks = new List<MaterialPropertyBlock>();
+
+        // 플레이 중에는 렌더러마다 재질 사본을 만들어 값을 넣는다. 프로퍼티 블록이 걸린 렌더러는 SRP Batcher 를 타지 못한다
+        // (2026-11-01 빌드 측정, 캐릭터 30명: 블록을 비우면 0.21 ms 줄고 SetPass 가 182 → 26).
+        // 편집 모드는 씬·프리팹에 재질 사본이 남지 않게 블록을 쓴다. 사본은 리그가 없어질 때 지우고 원래 재질로 되돌린다.
+        readonly Dictionary<Renderer, Material[]> _instances = new Dictionary<Renderer, Material[]>();
+        readonly Dictionary<Renderer, Material[]> _originals = new Dictionary<Renderer, Material[]>();
+        readonly List<Material> _made = new List<Material>();
+        /// <summary>시험용: 켜면 편집 모드에서도 플레이 중처럼 재질 사본에 넣는다. 저장되지 않는다.</summary>
+        [System.NonSerialized] public bool instancesInEditMode;
+        bool UseInstances { get { return Application.isPlaying || instancesInEditMode; } }
         bool _slotsBuilt;
         int _slotsFaceCount, _slotsOtherCount;
         float _slotsK, _slotsThick;
@@ -262,12 +272,34 @@ namespace FBX2NPR
             foreach (var r in otherRenderers)
             {
                 if (r == null) continue;
+                if (UseInstances)
+                {
+                    var mats = Instances(r);
+                    for (int mi = 0; mi < mats.Length; mi++)
+                        if (mats[mi] != null) { PushBody(new Sink { m = mats[mi] }, l, bodyBand); _slots.Add(new Slot { r = r, index = mi, face = false, m = mats[mi] }); }
+                    continue;
+                }
                 var b = SlotBlock(r, -1, false);
-                r.GetPropertyBlock(b); PushBody(b, l, bodyBand); r.SetPropertyBlock(b);
+                r.GetPropertyBlock(b); PushBody(new Sink { b = b }, l, bodyBand); r.SetPropertyBlock(b);
             }
             foreach (var r in faceRenderers)
             {
                 if (r == null) continue;
+                if (UseInstances)
+                {
+                    // 블록 경로와 같은 규칙: 재질 칸이 하나면 얼굴 값, 여럿이면 얼굴 재질 칸에만 얼굴 값을 넣고 나머지 칸에는 몸 값을 넣는다.
+                    var mats = Instances(r);
+                    for (int mi = 0; mi < mats.Length; mi++)
+                    {
+                        var m = mats[mi]; if (m == null) continue;
+                        bool faceSlot = mats.Length <= 1 || (m.HasProperty("_FaceWeightOn") && m.GetFloat("_FaceWeightOn") > 0.5f);
+                        var s = new Sink { m = m };
+                        if (faceSlot) { PushFace(s, up, fwd, l, k); s.F(Id.Stop2, bodyShadow); s.V(Id.InnerLineFade, fade); }
+                        else PushBody(s, l, bodyBand);
+                        _slots.Add(new Slot { r = r, index = mi, face = faceSlot, m = m });
+                    }
+                    continue;
+                }
                 r.GetSharedMaterials(_slotMats);
                 if (_slotMats.Count <= 1)
                 {
@@ -286,7 +318,7 @@ namespace FBX2NPR
                     var b = SlotBlock(r, mi, faceSlot);
                     r.GetPropertyBlock(b, mi);
                     if (faceSlot) { PushFace(new Sink { b = b }, up, fwd, l, k); b.SetFloat(Id.Stop2, bodyShadow); b.SetVector(Id.InnerLineFade, fade); }
-                    else PushBody(b, l, bodyBand);
+                    else PushBody(new Sink { b = b }, l, bodyBand);
                     r.SetPropertyBlock(b, mi);
                 }
             }
@@ -295,8 +327,8 @@ namespace FBX2NPR
         }
 
         /// <summary>
-        /// 플레이 중 매 프레임 (LateUpdate). 마지막 Apply 가 렌더러(재질 칸)마다 넣어 둔 블록에서 움직이는 값
-        /// (빛 방향, 얼굴의 위·앞 방향, 얼굴 중심·코끝·눈 위치)만 바꿔 다시 넣고, 움직인 것이 없으면 아무것도 하지 않는다.
+        /// 플레이 중 매 프레임 (LateUpdate). 마지막 Apply 가 렌더러(재질 칸)마다 값을 넣어 둔 재질 사본(편집 모드에서 부르면 블록)에 움직이는 값
+        /// (빛 방향, 얼굴의 위·앞 방향, 얼굴 중심·코끝·눈 위치)만 바꿔 넣고, 움직인 것이 없으면 아무것도 하지 않는다. 몸 재질은 빛이 움직였을 때만 넣는다.
         /// 나머지 값(슬라이더, 색, 코 도형)은 Apply 때만 넣는다: 스크립트로 값을 바꾸면 Apply() 를 불러야 한다 (인스펙터는 OnValidate 가 부른다).
         /// 재질 에셋 경로(미리보기 씬)이거나, 렌더러 목록·프리팹 배율·외곽선 두께가 바뀌었으면 Apply 로 넘긴다.
         /// 2026-11-01 빌드 측정에서 캐릭터 30명일 때 매 프레임 Apply 가 0.63 ms 였다 (문자열 프로퍼티 이름, 블록 읽기, 안 바뀌는 값 30여 개).
@@ -308,22 +340,63 @@ namespace FBX2NPR
             Vector3 up = transform.up, fwd = transform.forward, l = LightDirection();
             Vector3 c = faceCenter != null ? faceCenter.position : Vector3.zero, n = noseTip != null ? noseTip.position : Vector3.zero;
             Vector3 ea = eyeA != null ? eyeA.position : Vector3.zero, eb = eyeB != null ? eyeB.position : Vector3.zero;
-            if (Same(l, _pushedLight) && Same(up, _pushedUp) && Same(fwd, _pushedFwd) && Same(c, _pushedCenter) && Same(n, _pushedNose) && Same(ea, _pushedEyeA) && Same(eb, _pushedEyeB)) return;
+            bool lightMoved = !Same(l, _pushedLight);
+            bool faceMoved = !(Same(up, _pushedUp) && Same(fwd, _pushedFwd) && Same(c, _pushedCenter) && Same(n, _pushedNose) && Same(ea, _pushedEyeA) && Same(eb, _pushedEyeB));
+            if (!lightMoved && !faceMoved) return;
             for (int i = 0; i < _slots.Count; i++)
             {
                 var s = _slots[i];
-                s.b.SetVector(Id.LightDir, l);
-                if (s.face)
+                if (!s.face && !lightMoved) continue;   // 몸 재질은 빛 방향만 받는다 (재질 사본은 값을 넣으면 그 재질을 GPU 에 다시 올린다)
+                var sink = new Sink { m = s.m, b = s.b };
+                if (lightMoved) sink.V(Id.LightDir, l);
+                if (s.face && faceMoved)
                 {
-                    s.b.SetVector(Id.FaceUp, up); s.b.SetVector(Id.FaceForward, fwd);
-                    if (faceCenter != null) s.b.SetVector(Id.FaceCenter, c);
-                    if (noseTip != null) s.b.SetVector(Id.NoseTip, n);
-                    if (eyeA != null) s.b.SetVector(Id.EyeA, ea);
-                    if (eyeB != null) s.b.SetVector(Id.EyeB, eb);
+                    sink.V(Id.FaceUp, up); sink.V(Id.FaceForward, fwd);
+                    if (faceCenter != null) sink.V(Id.FaceCenter, c);
+                    if (noseTip != null) sink.V(Id.NoseTip, n);
+                    if (eyeA != null) sink.V(Id.EyeA, ea);
+                    if (eyeB != null) sink.V(Id.EyeB, eb);
                 }
-                if (s.index < 0) s.r.SetPropertyBlock(s.b); else s.r.SetPropertyBlock(s.b, s.index);
+                if (s.m == null) { if (s.index < 0) s.r.SetPropertyBlock(s.b); else s.r.SetPropertyBlock(s.b, s.index); }
             }
             RememberPushed(l, up, fwd);
+        }
+
+        // 플레이 중: 렌더러의 재질을 이 리그만 쓰는 사본으로 바꾸고 블록을 비운다. 이미 바꿨으면 그 사본을 돌려준다.
+        // 그 사이 다른 스크립트가 재질을 바꿨으면 지금 재질로 사본을 다시 만든다 (공유 재질에 값을 넣지 않게).
+        Material[] Instances(Renderer r)
+        {
+            r.GetSharedMaterials(_slotMats);
+            Material[] inst;
+            if (_instances.TryGetValue(r, out inst) && SameMaterials(_slotMats, inst)) return inst;
+            if (!_originals.ContainsKey(r)) _originals[r] = _slotMats.ToArray();
+            inst = new Material[_slotMats.Count];
+            for (int i = 0; i < inst.Length; i++)
+            {
+                if (_slotMats[i] == null) continue;
+                inst[i] = new Material(_slotMats[i]) { name = _slotMats[i].name + " (리그 사본)" };
+                _made.Add(inst[i]);
+            }
+            r.sharedMaterials = inst;
+            r.SetPropertyBlock(null);
+            for (int i = 0; i < inst.Length; i++) r.SetPropertyBlock(null, i);
+            _instances[r] = inst;
+            return inst;
+        }
+
+        static bool SameMaterials(List<Material> a, Material[] b)
+        {
+            if (a.Count != b.Length) return false;
+            for (int i = 0; i < b.Length; i++) if (a[i] != b[i]) return false;
+            return true;
+        }
+
+        void OnDestroy()
+        {
+            // 플레이 중에 만든 재질 사본을 지우고 렌더러를 원래 재질로 되돌린다
+            foreach (var kv in _originals) if (kv.Key != null) kv.Key.sharedMaterials = kv.Value;
+            foreach (var m in _made) if (m != null) { if (Application.isPlaying) Destroy(m); else DestroyImmediate(m); }
+            _originals.Clear(); _instances.Clear(); _made.Clear();
         }
 
         MaterialPropertyBlock SlotBlock(Renderer r, int index, bool face)
@@ -358,10 +431,10 @@ namespace FBX2NPR
 
         static bool Same(Vector3 a, Vector3 b) { return a.x == b.x && a.y == b.y && a.z == b.z; }   // Vector3 == 는 1e-5 안을 같다고 본다
 
-        void PushBody(MaterialPropertyBlock b, Vector3 l, Vector4 bodyBand)
+        void PushBody(Sink s, Vector3 l, Vector4 bodyBand)
         {
-            b.SetVector(Id.LightDir, l); b.SetFloat(Id.Stop2, bodyShadow); b.SetVector(Id.Band1, bodyBand);
-            b.SetFloat(Id.UrpLighting, urpLighting ? 1f : 0f); b.SetFloat(Id.ShadowReceive, bodyReceiveShadows);
+            s.V(Id.LightDir, l); s.F(Id.Stop2, bodyShadow); s.V(Id.Band1, bodyBand);
+            s.F(Id.UrpLighting, urpLighting ? 1f : 0f); s.F(Id.ShadowReceive, bodyReceiveShadows);
         }
 
         // k: 길이 배율. 재질 에셋 경로(미리보기 씬)는 늘 1, 변환한 프리팹은 인스턴스의 배율.
