@@ -14,6 +14,7 @@ namespace FBX2NPR.EditorTools
     /// 모델 하나를 '바로 쓸 수 있는 툰 캐릭터 프리팹'으로 바꾸는 한 경로.
     ///
     /// 지금까지 따로 있던 세 조각을 순서대로 한 번에 한다.
+    ///   0) 규격 검사 (README "넣기 전 조건"). 머리 뼈·얼굴 메시가 없거나 얼굴이 앞(+Z)을 보지 않으면 이유와 고치는 방법만 남기고 변환하지 않는다
     ///   1) 얼굴 노멀 정리 (임포터·미리보기와 같은 규칙: 머리 본 가중치, 얼굴 전체에서 한 번 구한 중심)
     ///   2) 얼굴 텍스처에서 구운 빛을 빼고 피부를 평평하게 (SkinFlatBake). 이미 평평한 텍스처와 피부가 한 색이 아닌 텍스처는 건너뛴다.
     ///   3) 얼굴 재질(명암선·코 음영·림)과 옷·머리카락 재질(일반 툰 밴드, 실루엣 선) 생성과 할당
@@ -110,7 +111,7 @@ namespace FBX2NPR.EditorTools
         [MenuItem("FBX2NPR/툰 캐릭터로 변환 (선택한 모델)")]
         static void ConvertSelectedMenu()
         {
-            int n = 0; var sb = new StringBuilder();
+            int n = 0; var sb = new StringBuilder(); var fails = new StringBuilder();
             foreach (var o in Selection.objects)
             {
                 string p = AssetDatabase.GetAssetPath(o);
@@ -118,12 +119,15 @@ namespace FBX2NPR.EditorTools
                 try
                 {
                     var r = Convert(p); if (r != null && r.prefabPath != null) { n++; sb.AppendLine(r.prefabPath); }
+                    else if (r != null) fails.AppendLine(Path.GetFileName(p) + "\n" + string.Join("\n", r.lines.FindAll(l => l.StartsWith("규격 검사")).ToArray()));
                     if (r != null) Debug.Log("[FBX2NPR] " + p + "\n" + r);
                 }
                 catch (Exception ex) { Debug.LogError("[FBX2NPR] 변환 실패: " + p + "\n" + ex); }
             }
             AssetDatabase.SaveAssets();
-            EditorUtility.DisplayDialog("FBX2NPR", n > 0 ? "툰 캐릭터 프리팹 " + n + "개를 만들었습니다.\n" + sb + "\n자세한 기록은 콘솔에 있습니다." : "프로젝트 창에서 모델(FBX)을 선택한 뒤 실행하세요.", "확인");
+            string msg = n > 0 ? "툰 캐릭터 프리팹 " + n + "개를 만들었습니다.\n" + sb + "\n자세한 기록은 콘솔에 있습니다." : fails.Length > 0 ? "" : "프로젝트 창에서 모델(FBX)을 선택한 뒤 실행하세요.";
+            if (fails.Length > 0) msg += (msg.Length > 0 ? "\n\n" : "") + "변환하지 못한 모델:\n" + fails;
+            EditorUtility.DisplayDialog("FBX2NPR", msg, "확인");
         }
         [MenuItem("FBX2NPR/툰 캐릭터로 변환 (선택한 모델)", true)]
         static bool ConvertSelectedValidate()
@@ -164,6 +168,7 @@ namespace FBX2NPR.EditorTools
                 prefabPath = dir + "/" + Safe(c) + "_Toon.prefab";
                 if (oldRig != null && oldRig.generatedAssets != null) prevGenerated.AddRange(oldRig.generatedAssets);
             }
+            bool dirExisted = AssetDatabase.IsValidFolder(dir);   // 규격 검사에서 막히면 이번에 만든 빈 폴더를 지운다
             EnsureFolder(dir + "/Meshes"); EnsureFolder(dir + "/Materials"); EnsureFolder(dir + "/Textures");
             bool existed = AssetDatabase.LoadAssetAtPath<GameObject>(prefabPath) != null;
             int bodyMode = BodyFlattenOverride >= 0 ? BodyFlattenOverride : crit.bodyFlatten;
@@ -177,6 +182,7 @@ namespace FBX2NPR.EditorTools
                 var parts = CollectParts(inst, crit, modelPath, rep, headBone);
                 bool lashDrawn = false;   // 어느 텍스처에서든 눈매 먹선(아이라인)을 그렸는가 → 속눈썹 카드 메시를 숨길지
                 if (parts.Count == 0) { rep.lines.Add("렌더러 없음"); return rep; }
+                if (!CheckSpec(modelPath, inst, crit, headBone, parts, rep)) { if (!dirExisted) AssetDatabase.DeleteAsset(dir); return rep; }
 
                 // ---- 1) 노멀: 원본은 UV3(물체 공간)와 UV4(탄젠트 공간, 뼈를 따라 돈다)에, 조명용은 방사형(얼굴 전체에서 한 번 구한 중심)
                 foreach (var p in parts)
@@ -788,6 +794,80 @@ namespace FBX2NPR.EditorTools
             var saved = AssetDatabase.LoadAssetAtPath<Texture2D>(assetPath);
             MarkGenerated(saved);
             return saved;
+        }
+
+        // 얼굴 방향을 판정할 최소 확신도. 머리 전체가 한 메시면 면 방향이 서로 지워져 0.1 아래다(믹사모·유니티짱 0.00~0.09) — 그때는 판정하지 않는다.
+        // 얼굴만 따로인 메시는 0.19~0.27 (NightDress, 미라이, 친구 모델).
+        const float FacingConfidence = 0.15f;
+
+        /// <summary>
+        /// 규격 검사 (README "넣기 전 조건"). 막는 항목: 머리 뼈 없음, 얼굴 메시 없음, 얼굴이 앞(+Z)을 보지 않음(확신할 때만).
+        /// 알리는 항목: 키가 사람 크기에서 크게 벗어남, FBX 에 표정이 있는데 가져오기에서 꺼짐. 막는 항목이 있으면 false.
+        /// </summary>
+        static bool CheckSpec(string modelPath, GameObject inst, FBX2NPRAssetSettings crit, Transform headBone, List<Part> parts, Report rep)
+        {
+            var block = new List<string>(); var warn = new List<string>();
+            bool anyFace = parts.Exists(p => p.FaceRend);
+            if (headBone == null)
+                block.Add("머리 뼈를 찾지 못했습니다 (이름에 '" + crit.headBoneContains + "'가 든 뼈). 모델 설정의 headBoneContains 를 뼈 이름에 맞추거나, 뼈가 없으면 Blender 에서 머리 뼈를 붙여 넣으세요.");
+            else if (!anyFace)
+                block.Add("얼굴 메시를 찾지 못했습니다 (재질·메시 이름 규칙 '" + crit.faceMaterialContains + "', 머리 뼈 가중치 0.5 이상). 모델 설정의 faceMaterialContains 를 얼굴 재질 이름에 맞추세요.");
+            if (anyFace)
+            {
+                Vector3 sum = Vector3.zero; double area = 0;
+                foreach (var p in parts) if (p.FaceRend) AddFaceArea(p.mesh.vertices, p.mesh.triangles, p.weights, p.l2w, ref sum, ref area);
+                float conf, yaw = FacingYaw(sum, area, out conf);
+                if (conf >= FacingConfidence && Mathf.Abs(yaw) > 45f)
+                    block.Add(string.Format(CultureInfo.InvariantCulture, "얼굴이 앞(+Z)이 아니라 {0} 쪽을 보고 있습니다 (수평 {1:F0}°, 확신도 {2:F2}). Blender 등에서 돌려 +Z 를 보게 한 뒤 다시 넣으세요.",
+                        Mathf.Abs(yaw) > 135f ? "뒤(-Z)" : yaw > 0f ? "+X" : "-X", yaw, conf));
+            }
+            var b = new Bounds(); bool any = false;
+            foreach (var r in inst.GetComponentsInChildren<Renderer>(true)) { if (!any) { b = r.bounds; any = true; } else b.Encapsulate(r.bounds); }
+            if (any && (b.size.y < 0.8f || b.size.y > 2.5f))
+                warn.Add(string.Format(CultureInfo.InvariantCulture, "키가 {0:F2} m 입니다. 시험은 사람 크기(약 1.5 m)로 했습니다. 크게 다르면 선 굵기·코 그림자 크기가 어긋날 수 있어 크기를 맞춰 넣기를 권합니다.", b.size.y));
+            var mi = AssetImporter.GetAtPath(modelPath) as ModelImporter;
+            if (mi != null && !mi.importBlendShapes && FileContains(modelPath, "BlendShapeChannel"))
+                warn.Add("FBX 에 표정(블렌드셰이프)이 있지만 가져오기 설정에서 꺼져 있습니다. 모델 Import Settings 의 Blend Shapes 를 켜고 다시 변환하면 표정도 옮겨집니다.");
+            foreach (var w in warn) rep.lines.Add("규격 검사(알림): " + w);
+            foreach (var x in block) rep.lines.Add("규격 검사(변환하지 않음): " + x);
+            return block.Count == 0;
+        }
+
+        /// <summary>얼굴 삼각형(세 정점 모두 얼굴 가중치 > 0)의 면 방향을 넓이 가중으로 더한다(월드). 노멀 값이 아니라 위치로 구해서, 구 노멀을 씌운 파일도 바르게 본다.</summary>
+        internal static void AddFaceArea(Vector3[] v, int[] t, float[] w, Matrix4x4 l2w, ref Vector3 sum, ref double area)
+        {
+            for (int i = 0; i < t.Length; i += 3)
+            {
+                if (w[t[i]] <= 0f || w[t[i + 1]] <= 0f || w[t[i + 2]] <= 0f) continue;
+                var a = l2w.MultiplyPoint3x4(v[t[i]]);
+                var n = Vector3.Cross(l2w.MultiplyPoint3x4(v[t[i + 1]]) - a, l2w.MultiplyPoint3x4(v[t[i + 2]]) - a);   // 유니티 감김에서 바깥쪽, 길이 = 넓이 x 2
+                sum += n; area += n.magnitude;
+            }
+        }
+
+        /// <summary>바라보는 수평 각도(0 = +Z, +90 = +X)와 확신도(|수평 합| / 넓이).</summary>
+        internal static float FacingYaw(Vector3 sum, double area, out float confidence)
+        {
+            var h = new Vector3(sum.x, 0f, sum.z);
+            confidence = area > 0 ? (float)(h.magnitude / area) : 0f;
+            return Mathf.Atan2(h.x, h.z) * Mathf.Rad2Deg;
+        }
+
+        /// <summary>파일에 ASCII 문자열이 들어 있는가 (바이너리 FBX 도 클래스 이름은 글자로 들어 있다).</summary>
+        internal static bool FileContains(string path, string text)
+        {
+            try
+            {
+                var b = File.ReadAllBytes(path); var k = Encoding.ASCII.GetBytes(text);
+                for (int i = 0; i + k.Length <= b.Length; i++)
+                {
+                    if (b[i] != k[0]) continue;
+                    int j = 1; while (j < k.Length && b[i + j] == k[j]) j++;
+                    if (j == k.Length) return true;
+                }
+            }
+            catch (IOException) { }
+            return false;
         }
 
         /// <summary>
