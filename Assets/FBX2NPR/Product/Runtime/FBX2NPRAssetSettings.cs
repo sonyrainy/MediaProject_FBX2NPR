@@ -59,6 +59,12 @@ namespace FBX2NPR
         /// <summary>대상 본 이름에 포함될 문자열. 믹사모는 mixamorig8:Head 같은 식입니다.</summary>
         public string headBoneContains = "head";
 
+        /// <summary>
+        /// 머리 뼈 아래에 붙은 얼굴 뼈 이름에 포함될 문자열(; 로 구분). 얼굴 메시에서는 이 뼈들의 가중치도 얼굴로 셉니다.
+        /// 게임용 리그는 립싱크용 입 뼈와 눈 뼈를 머리 뼈 아래에 따로 둡니다. 같은 자리의 머리카락·귀·장신구 뼈는 이름이 달라 빠집니다.
+        /// </summary>
+        public string faceBoneContains = "mouth;jaw;lip;eye;brow;cheek";
+
         /// <summary>이 가중치 미만인 정점은 건드리지 않습니다.</summary>
         [Range(0f, 1f)] public float weightThreshold = 0.5f;
 

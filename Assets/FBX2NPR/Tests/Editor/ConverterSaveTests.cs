@@ -47,7 +47,8 @@ namespace FBX2NPR.Tests
             string guid = AssetDatabase.AssetPathToGUID(path);
 
             var second = FBX2NPRConverter.SaveOrReplace(MeshWith(5), path);
-            Assert.That(second, Is.SameAs(first), "같은 에셋 객체를 돌려줘야 이미 연결된 참조가 그대로 따라옵니다.");
+            // 메시는 덮어쓴 뒤 다시 불러오므로(SkinnedMeshRenderer 가 예전 정점 배치를 거부한다) 객체는 바뀔 수 있다. 같은 경로·같은 GUID 의 에셋이면 된다.
+            Assert.That(second, Is.SameAs(AssetDatabase.LoadAssetAtPath<Mesh>(path)), "그 경로의 에셋을 돌려줘야 합니다.");
             Assert.That(AssetDatabase.AssetPathToGUID(path), Is.EqualTo(guid));
             Assert.That(second.vertexCount, Is.EqualTo(5), "내용은 새 메시로 바뀌어야 합니다.");
         }

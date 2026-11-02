@@ -279,7 +279,7 @@ namespace FBX2NPR.EditorTools
                 p.origN = p.mesh.normals;
                 p.l2w = smr.transform.localToWorldMatrix;
                 p.albedo = ResolveAlbedo(smr.sharedMaterial, path, crit);
-                var fw = FaceMeshRule.Weigh(src, smr.bones, smr.sharedMaterials, crit);
+                var fw = FaceMeshRule.WeighSkinned(smr, src, inst.transform, crit);
                 p.weights = fw.face; p.boundsW = fw.head; p.headCount = fw.faceCount; p.isFace = fw.isFace;
                 parts.Add(p);
             }

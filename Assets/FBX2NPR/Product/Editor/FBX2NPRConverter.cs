@@ -179,7 +179,6 @@ namespace FBX2NPR.EditorTools
                 if (parts.Count == 0) { rep.lines.Add("렌더러 없음"); return rep; }
 
                 // ---- 1) 노멀: 원본은 UV3(물체 공간)와 UV4(탄젠트 공간, 뼈를 따라 돈다)에, 조명용은 방사형(얼굴 전체에서 한 번 구한 중심)
-                bool blendWarned = false;
                 foreach (var p in parts)
                 {
                     p.mesh.SetUVs(3, new List<Vector3>(p.origN));
@@ -189,11 +188,6 @@ namespace FBX2NPR.EditorTools
                     var fw = new List<Vector2>(p.weights.Length);
                     for (int i = 0; i < p.weights.Length; i++) fw.Add(new Vector2(p.weights[i], p.lineFadeW != null ? p.lineFadeW[i] : 0f));
                     p.mesh.SetUVs(2, fw);
-                    if (p.mesh.blendShapeCount > 0 && !blendWarned)
-                    {
-                        blendWarned = true;
-                        rep.lines.Add("주의: 블렌드셰이프(표정)가 있는 메시가 있습니다 (" + p.name + " 등). 표정을 움직일 때의 노멀은 시험하지 않았습니다: 표정의 노멀·탄젠트 변화량이 원본 노멀을 되돌리는 축도 함께 움직여 코 음영·얼굴 안쪽 선이 조금 틀어질 수 있습니다.");
-                    }
                 }
                 var targets = new List<FaceMeshRule.Target>();
                 foreach (var p in parts) targets.Add(p.Target());
@@ -207,6 +201,14 @@ namespace FBX2NPR.EditorTools
                     p.mesh.RecalculateTangents();   // 정리한 노멀에 맞는 탄젠트. 노멀맵과 원본 노멀 복원이 같은 축을 쓴다
                     cleaned += p.headCount;
                 }
+                // 표정(블렌드셰이프)은 얼굴에서 모양만 바꾼다. 노멀까지 바꾸면 정리한 노멀이 표정을 지을 때 흐트러진다.
+                int frozenShapes = 0, frozenMeshes = 0;
+                foreach (var p in parts)
+                {
+                    if (p.headCount == 0 || p.mesh.blendShapeCount == 0) continue;
+                    int f = FreezeShapeNormals(p.mesh, p.weights); frozenShapes += f; if (f > 0) frozenMeshes++;
+                }
+                if (frozenShapes > 0) rep.lines.Add(string.Format("표정: 얼굴 메시 {0}개의 블렌드셰이프 프레임 {1}개가 얼굴 정점에서는 모양만 바꾸게 함 (노멀·탄젠트 변화량 0)", frozenMeshes, frozenShapes));
                 // 블렌더에서 다듬어 불러온 얼굴 노멀이 있으면 방사형 대신 그 노멀을 넣는다 (FaceNormalRoundTrip, 다시 변환해도 유지). 원본 노멀은 아래에서 새 노멀 기준으로 UV4 에 굽는다.
                 var normalEdit = FaceNormalEdit.LoadFor(modelPath);
                 if (normalEdit != null)
@@ -707,7 +709,7 @@ namespace FBX2NPR.EditorTools
                 // 둘이 다른 모델(임포트된 자세가 바인드 포즈와 조금 다르거나, 메시 노드에 스케일이 걸린 FBX)에서는 머리 본 기준 행렬을 쓴다.
                 float diff; p.l2w = BindToWorld(smr, src, headBone, out diff); p.bindDiff = diff;
                 if (diff > maxBindDiff) { maxBindDiff = diff; maxBindName = src.name; }
-                p.Weigh(FaceMeshRule.Weigh(src, smr.bones, smr.sharedMaterials, crit));
+                p.Weigh(FaceMeshRule.WeighSkinned(smr, src, inst.transform, crit));
                 SetupSlots(p, crit, path, rep);
                 parts.Add(p);
             }
@@ -788,6 +790,34 @@ namespace FBX2NPR.EditorTools
             return saved;
         }
 
+        /// <summary>
+        /// 표정 프레임마다, 얼굴 가중치가 있는 정점의 노멀·탄젠트 변화량을 0 으로 한다 (위치 변화량은 그대로). 유니티가 계산한 변화량은 정리 전 형상 기준이다.
+        /// 얼굴 밖 정점(가중치 0)은 그대로 둔다. 바꾼 프레임 수를 돌려준다.
+        /// </summary>
+        internal static int FreezeShapeNormals(Mesh mesh, float[] weights)
+        {
+            int n = mesh.vertexCount, count = mesh.blendShapeCount, changed = 0;
+            var names = new string[count]; var frames = new List<KeyValuePair<float, Vector3[][]>>[count];
+            for (int s = 0; s < count; s++)
+            {
+                names[s] = mesh.GetBlendShapeName(s); frames[s] = new List<KeyValuePair<float, Vector3[][]>>();
+                for (int f = 0; f < mesh.GetBlendShapeFrameCount(s); f++)
+                {
+                    var dv = new Vector3[n]; var dn = new Vector3[n]; var dt = new Vector3[n];
+                    mesh.GetBlendShapeFrameVertices(s, f, dv, dn, dt);
+                    bool any = false;
+                    for (int i = 0; i < n; i++)
+                        if (weights[i] > 0f && (dn[i] != Vector3.zero || dt[i] != Vector3.zero)) { dn[i] = Vector3.zero; dt[i] = Vector3.zero; any = true; }
+                    if (any) changed++;
+                    frames[s].Add(new KeyValuePair<float, Vector3[][]>(mesh.GetBlendShapeFrameWeight(s, f), new[] { dv, dn, dt }));
+                }
+            }
+            if (changed == 0) return 0;
+            mesh.ClearBlendShapes();
+            for (int s = 0; s < count; s++) foreach (var fr in frames[s]) mesh.AddBlendShapeFrame(names[s], fr.Key, fr.Value[0], fr.Value[1], fr.Value[2]);
+            return changed;
+        }
+
         /// <summary>같은 경로에 에셋이 있으면 내용만 바꾸고(식별자 유지) 그 에셋을 돌려준다. 없으면 새로 만든다.</summary>
         internal static T SaveOrReplace<T>(T obj, string path) where T : UnityEngine.Object
         {
@@ -799,6 +829,15 @@ namespace FBX2NPR.EditorTools
                 UnityEngine.Object.DestroyImmediate(obj);
                 EditorUtility.SetDirty(old);
                 MarkGenerated(old);
+                // 덮어쓴 메시는 GPU 쪽 정점 배치가 예전 그대로 남는다. 배치가 바뀌면(표정을 켜고 다시 가져와 정점 수·스트림이 달라진 유니티짱 얼굴)
+                // SkinnedMeshRenderer 가 "does not match the expected mesh data size and vertex stride" 로 그리기를 멈춘다 (MeshRenderer 는 그린다).
+                // 디스크에 저장하고 다시 불러오면 새 배치로 만들어진다.
+                if (old is Mesh)
+                {
+                    AssetDatabase.SaveAssetIfDirty(old);
+                    AssetDatabase.ImportAsset(path, ImportAssetOptions.ForceUpdate);
+                    old = AssetDatabase.LoadAssetAtPath<T>(path);
+                }
                 return old;
             }
             AssetDatabase.CreateAsset(obj, path);

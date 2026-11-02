@@ -96,12 +96,15 @@ namespace FBX2NPR.EditorTools
             }
             if (!any) return false;
             var b0 = bounds; var near = new Bounds(b0.center, b0.size * 1.5f);
-            foreach (var mf in root.GetComponentsInChildren<MeshFilter>(true))
+            foreach (var r in root.GetComponentsInChildren<Renderer>(true))
             {
-                var r = mf.GetComponent<Renderer>(); if (r == null || mf.sharedMesh == null || !mf.gameObject.activeInHierarchy) continue;
-                if (crit.IsIgnoredMesh(mf.name)) continue;
+                // 정적 메시와, 본에 묶이지 않은 스킨 메시(표정만 있는 메시 — 표정을 켠 유니티짱 얼굴). 본에 묶인 스킨 메시는 위에서 셌다.
+                var smr = r as SkinnedMeshRenderer; var mf = smr == null ? r.GetComponent<MeshFilter>() : null;
+                var mesh = smr != null ? smr.sharedMesh : (mf != null ? mf.sharedMesh : null);
+                if (mesh == null || !r.gameObject.activeInHierarchy || (smr != null && FaceMeshRule.HasSkin(smr, mesh))) continue;
+                if (crit.IsIgnoredMesh(r.name)) continue;
                 var rb = r.bounds;
-                if (near.Contains(rb.center) && rb.size.magnitude <= b0.size.magnitude) { bounds.Encapsulate(rb); count += mf.sharedMesh.vertexCount; }
+                if (near.Contains(rb.center) && rb.size.magnitude <= b0.size.magnitude) { bounds.Encapsulate(rb); count += mesh.vertexCount; }
             }
             return true;
         }

@@ -233,7 +233,7 @@ namespace FBX2NPR.EditorTools
                 }
 
                 // 머리 본 가중치·얼굴 판정 — 변환기·임포터·미리보기와 같은 규칙 (FaceMeshRule). 프레이밍은 머리 본 가중치 전체로, 변환은 얼굴 메시만.
-                var fw = FaceMeshRule.Weigh(src, smr.bones, smr.sharedMaterials, crit);
+                var fw = FaceMeshRule.WeighSkinned(smr, src, inst.transform, crit);
                 p.weights = fw.face; p.boundsW = fw.head; p.headCount = fw.faceCount; p.isFace = fw.isFace;
                 if (!p.isFace) headBoneOnly += fw.headCount;
                 totalV += p.mesh.vertexCount; totalHead += p.headCount;
