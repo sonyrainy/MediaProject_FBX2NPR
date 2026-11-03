@@ -213,5 +213,3 @@ Assets/FBX2NPR/
 └─ Models/            얼굴 파싱 ONNX 자리 (저장소에는 없음)
 ARFaceDemo/           웹캠 데모 (브라우저)
 ```
-
-Product 코드는 Measure/Capture 코드를 참조하지 않습니다. 초기 실험인 회화풍 모드(쿠와하라 + LIC)와 실사풍 피부 다시 그리기(얼굴 파싱 [yakhyo/face-parsing](https://github.com/yakhyo/face-parsing), ONNX는 저장소에 없음)는 코드에만 남아 있습니다.
