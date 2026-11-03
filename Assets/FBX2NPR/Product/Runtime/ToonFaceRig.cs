@@ -49,8 +49,8 @@ namespace FBX2NPR
 
         public enum NoseFigure { [InspectorName("초승달")] Crescent = 0, [InspectorName("세모")] Triangle = 1, [InspectorName("둥근 사다리꼴 (원래 그림자)")] RoundedQuad = 2, [InspectorName("물방울 (레퍼런스)")] Teardrop = 3 }
 
-        [Header("코 도형 (코가 평평한 캐릭터: 원본 노멀 대신 도형)")]
-        [Tooltip("미리보기 생성기가 코가 평평한 캐릭터(유니티짱)만 켠다. 원본 노멀 그림자는 큰 메시 면을 따라 꺾여 모서리가 각졌다. 켜면 위의 임계값·영역 대신 이 도형을 쓴다.")]
+        [Header("코 도형 (원본 노멀 대신 도형)")]
+        [Tooltip("변환 도구가 원본 노멀 그림자가 질 자리·크기를 재서 켠다(자리를 못 재면 끈다). 원본 노멀 그림자는 큰 메시 면을 따라 꺾이거나, 애니풍 코에서 모양 없는 얼룩이 됐다. 켜면 위의 임계값·영역 대신 이 도형을 쓴다.")]
         public bool noseHalfMoon = false;
         [Tooltip("둥근 사다리꼴: 원래 원본 노멀 그림자의 윤곽을 사각형으로 줄이고 모서리를 둥글게. 세모: 콧선 쪽 세로 변 + 코끝 높이의 밑변, 꼭짓점은 위. 초승달: 두 호가 위아래 끝에서 만나는 모양.")]
         public NoseFigure noseFigure = NoseFigure.RoundedQuad;
