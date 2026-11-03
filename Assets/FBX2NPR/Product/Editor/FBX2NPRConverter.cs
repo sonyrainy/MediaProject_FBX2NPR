@@ -458,8 +458,10 @@ namespace FBX2NPR.EditorTools
                     }
                     if (p.smr != null) p.smr.sharedMesh = p.mesh; else p.mf.sharedMesh = p.mesh;
                     p.rend.sharedMaterials = mats;
-                    // 외곽선 피처가 원본 노멀로 다시 그릴 렌더러. 이미 평평하게 칠한 얼굴은 실루엣 선만 쓰므로(위 handPainted) 켜지 않는다.
-                    if (faceRend && !rep.handPainted) p.rend.renderingLayerMask |= OriginalNormals.LineLayer;
+                    // 외곽선 피처가 다시 그릴 렌더러. 안쪽 선을 쓰는 얼굴은 원본 노멀로, 이미 평평하게 칠한 얼굴(위 handPainted)은 재질 값대로
+                    // 카메라 방향 노멀로 그려진다. 그래야 외곽선이 그 얼굴 자리를 알고 얼굴 안에서는 깊이가 끊긴 곳만 선으로 본다
+                    // (전에는 켜지 않아 코볼·입 옆처럼 비스듬히 돌아가는 면이 흐린 겹선으로 남았다, Night Dress 2026-11-03).
+                    if (faceRend) p.rend.renderingLayerMask |= OriginalNormals.LineLayer;
                     (faceRend ? faceRends : otherRends).Add(p.rend);
                 }
                 rep.lines.Add(string.Format("메시 {0}개, 재질 {1}개 (얼굴 렌더러 {2}, 그 밖 {3}), 텍스처 평탄화 {4}개", parts.Count, matN, faceRends.Count, otherRends.Count, baked));

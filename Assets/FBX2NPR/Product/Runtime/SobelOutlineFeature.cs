@@ -15,6 +15,7 @@ namespace FBX2NPR
     /// 화면 공간 방식은 두께가 픽셀 단위로 일정하고, 결과를 곱하므로 항상 어두워집니다.
     ///
     /// 얼굴 렌더러(변환 도구가 OriginalNormals.LineLayer 를 켠 것)는 원본 노멀로 한 번 더 그려 그 노멀로 선을 찾습니다.
+    /// 이미 평평하게 칠한 얼굴(실루엣 선만)은 카메라 방향 노멀로 그려지고, 그 얼굴 안에서는 깊이가 끊긴 곳만 선으로 봅니다(flatFaceJumpOnly).
     /// 노멀 버퍼에는 재질 셰이더가 쓴 값이 들어가는데, ToonBand 가 아닌 셰이더(UTS 등)는 정리된 노멀을 써서 코·입 선이 사라지기 때문입니다.
     /// </summary>
     [DisallowMultipleRendererFeature("FBX2NPR Sobel Outline")]
@@ -28,8 +29,10 @@ namespace FBX2NPR
             [Range(0f, 40f)] public float depthScale  = 12f;
             [Range(0f, 8f)]  public float normalScale = 0.8f;   // 훑기 결과. 2.2 는 포화돼 선이 뭉갰습니다.
             [Range(0f, 1f)]  public float threshold   = 0.30f;
+            [Tooltip("실루엣 선만 쓰는 얼굴(이목구비를 텍스처에 그린 얼굴) 안에서는 깊이가 앞뒤로 끊긴 곳만 선으로 본다. 코볼·입 옆처럼 비스듬히 돌아가는 면이 흐린 겹선(팔자주름처럼)으로 잡혀 넣었다(Night Dress). 턱 아래 목처럼 떨어진 곳과 얼굴 테두리는 그대로 그린다.")]
+            public bool flatFaceJumpOnly = true;
             public RenderPassEvent injectionPoint = RenderPassEvent.AfterRenderingTransparents;
-            // 0=정상, 1=엣지만, 2=씬 노멀, 3=깊이
+            // 0=정상, 1=엣지만, 2=씬 노멀, 3=깊이, 4=실루엣만 얼굴 안(깊이 끊김만 보는 곳)
             public float debug = 0f;
             [Tooltip("얼굴 렌더러를 원본 노멀로 다시 그려 그 노멀로 선을 찾는다. 끄면 재질 셰이더가 노멀 버퍼에 쓴 값만 쓴다.")]
             public bool restoreOriginalNormals = true;
@@ -83,6 +86,7 @@ namespace FBX2NPR
             static readonly int s_NormalScale = Shader.PropertyToID("_NormalScale");
             static readonly int s_Threshold   = Shader.PropertyToID("_Threshold");
             static readonly int s_Debug       = Shader.PropertyToID("_Debug");
+            static readonly int s_FlatFaceJump = Shader.PropertyToID("_FlatFaceJumpOnly");
             static readonly int s_LineNormals = Shader.PropertyToID("_FBX2NPRLineNormals");
             static readonly int s_LineOn      = Shader.PropertyToID("_LineNormalsOn");
             // 원본 노멀 패스로 그릴 재질의 패스. 거의 모든 URP 셰이더(ToonBand, UTS, lilToon, Lit)에 있어 재질마다 한 번씩만 그려진다.
@@ -101,6 +105,7 @@ namespace FBX2NPR
                 m_Mat.SetFloat(s_NormalScale, s.normalScale);
                 m_Mat.SetFloat(s_Threshold,   s.threshold);
                 m_Mat.SetFloat(s_Debug,       s.debug);
+                m_Mat.SetFloat(s_FlatFaceJump, s.flatFaceJumpOnly ? 1f : 0f);
             }
 
             class PassData

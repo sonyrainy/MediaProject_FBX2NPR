@@ -67,12 +67,10 @@ namespace FBX2NPR.Tests
                 foreach (var r in rig.faceRenderers)
                 {
                     if (r == null) continue;
-                    // 이미 평평하게 칠한 얼굴은 재질이 실루엣 선만 쓰므로(_OutlineFlatNormal) 원본 노멀로 다시 그리지 않는다.
-                    bool innerLines = false;
-                    foreach (var mat in r.sharedMaterials)
-                        if (mat != null && mat.HasProperty("_OutlineFlatNormal") && mat.GetFloat("_OutlineFlatNormal") < 0.5f) innerLines = true;
+                    // 얼굴은 모두 외곽선 피처가 다시 그린다. 안쪽 선을 쓰는 얼굴은 원본 노멀로, 이미 평평하게 칠한 얼굴(_OutlineFlatNormal)은
+                    // 카메라 방향 노멀로 그려져 외곽선이 그 얼굴 안에서는 깊이가 끊긴 곳만 선으로 본다 (2026-11-03 전에는 실루엣만 얼굴을 빼 두었다).
                     bool marked = (r.renderingLayerMask & OriginalNormals.LineLayer) != 0;
-                    Assert.That(marked, Is.EqualTo(innerLines), pf.name + "/" + r.name + (innerLines ? ": 안쪽 선을 쓰는 얼굴인데 원본 노멀 렌더링 레이어가 꺼져 있습니다." : ": 실루엣 선만 쓰는 얼굴인데 원본 노멀 렌더링 레이어가 켜져 있습니다."));
+                    Assert.That(marked, Is.True, pf.name + "/" + r.name + ": 얼굴인데 외곽선 렌더링 레이어가 꺼져 있습니다 (다시 변환 필요).");
                 }
             }
             if (rigs == 0) Assert.Ignore("얼굴 리그가 있는 변환 결과가 없습니다 (" + FBX2NPRConverter.OutRoot + ")");

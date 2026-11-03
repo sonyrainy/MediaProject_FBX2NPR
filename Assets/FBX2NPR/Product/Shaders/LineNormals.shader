@@ -5,6 +5,8 @@
 // 피처가 렌더러의 재질 대신 이 셰이더로 그리되(override shader) 재질 값은 그대로 받으므로,
 // ToonBand 재질이면 안쪽 선 지우기·실루엣만·컷아웃 값까지 DepthNormals 패스와 같은 결과가 나옵니다. 다른 재질이면 그 값들은 꺼진 기본값입니다.
 // 출력: xyz 외곽선용 노멀(월드), w 카메라까지 거리. 소벨 셰이더가 장면 깊이와 같은 자리에서만 이 노멀을 씁니다.
+// 실루엣 선만 쓰는 얼굴(_OutlineFlatNormal)의 안쪽(얼굴 가중치 0.9 초과)은 w 를 음수로 남겨, 소벨 셰이더가 거기서 깊이가 끊긴 곳만 선으로 보게 합니다.
+// 얼굴 가중치로 자르는 것은 같은 재질을 쓰는 몸의 선까지 바꾸지 않으려는 것입니다.
 Shader "FBX2NPR/LineNormals"
 {
     Properties
@@ -74,6 +76,7 @@ Shader "FBX2NPR/LineNormals"
                 float3 normalWS   : TEXCOORD0;
                 float2 uv         : TEXCOORD1;
                 float  eyeDepth   : TEXCOORD2;
+                float  faceW      : TEXCOORD3;
             };
 
             Varyings vert (Attributes v)
@@ -85,13 +88,15 @@ Shader "FBX2NPR/LineNormals"
                 // UV4 가 비어 있으면(변환하지 않은 메시) 메시 노멀을 씁니다.
                 float3 src = dot(v.origTS, v.origTS) > 0.25 ? DecodeOriginalNormal(v.origTS, v.normalOS, v.tangentOS) : v.normalOS;
                 o.normalWS = LineNormalWS(v.positionOS.xyz, src, v.faceW);
+                o.faceW = v.faceW.x;
                 return o;
             }
 
             float4 frag (Varyings i) : SV_Target
             {
                 if (_Cutout > 0.5) clip(SAMPLE_TEXTURE2D(_Albedo, sampler_Albedo, i.uv).a - _Cutoff);
-                return float4(normalize(i.normalWS), i.eyeDepth);
+                bool flatInner = _OutlineFlatNormal > 0.5 && i.faceW > 0.9;
+                return float4(normalize(i.normalWS), flatInner ? -i.eyeDepth : i.eyeDepth);
             }
             ENDHLSL
         }
