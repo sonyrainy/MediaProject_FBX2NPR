@@ -28,7 +28,7 @@ Shader "NormalTest/ToonBand"
         // 빛 쪽 윤곽선 안쪽을 살짝 밝게 (림라이트). 그림자 띠와 같은 구조, 방향만 반대.
         _RimLight    ("빛 쪽 가장자리 밝기 (0이면 끔)", Range(0,1)) = 0
         _RimWidth    ("빛 쪽 가장자리 폭 임계값", Float) = 0.92
-        // 빛을 잘 받는 곳은 원본 노멀(코·뺨의 형태감), 어두워지는 곳은 정리된 노멀(얼룩 제거). UV3 에 심은 원본 노멀을 쓴다.
+        // 빛을 잘 받는 곳은 원본 노멀(코·뺨의 형태감), 어두워지는 곳은 정리된 노멀(얼룩 제거). UV3(스킨 메시는 UV4)에 심은 원본 노멀을 쓴다.
         _OrigBlend   ("빛 쪽은 원본 노멀 유지 (0이면 끔)", Range(0,1)) = 0
         _OrigLo      ("원본 유지 하한 (이 ndotl 아래는 정리된 노멀)", Float) = 0.25
         _OrigHi      ("원본 유지 상한 (이 ndotl 위는 원본 노멀)", Float) = 0.55
@@ -61,6 +61,7 @@ Shader "NormalTest/ToonBand"
         _NoseShade   ("코 음영 세기 (0이면 끔)", Range(0,1)) = 0
         _NoseTip     ("코끝 위치 (월드)", Vector) = (0, 0, 0, 0)
         _NoseRadius  ("코 영역 반경 (x 좌우, y 위, z 아래, w 뒤쪽 깊이)", Vector) = (0.02, 0.045, 0.012, 0.04)
+        _NoseLineFade ("코 영역 안쪽 선 지우기 (리그가 넣음)", Range(0,1)) = 0
         _NoseStop    ("코 음영 임계값 (원본 노멀 수평 ndotl)", Float) = 0.30
         _NoseDebug   ("코(빨강)·눈(파랑) 영역 표시 (디버그)", Range(0,1)) = 0
         // 코 반달 (54번): 코가 평평한 캐릭터는 원본 노멀 대신 코끝 기준 얼굴 평면에 반달(곧은 변 + 반타원 호)을 그린다.
@@ -92,9 +93,9 @@ Shader "NormalTest/ToonBand"
         [Toggle] _ShowNormal ("최종 노멀을 색으로", Float) = 0
         [Toggle] _UseOrigNormal ("선 검출에 원본 노멀 사용 (UV3)", Float) = 1
         // 스킨 메시용. UV3 에 실은 원본 노멀은 뼈를 따라 돌지 않습니다(스키닝은 위치·노멀·탄젠트만 변형합니다).
-        // 고개를 돌리면 코 음영과 외곽선이 어긋나므로, 변환 도구는 원본 노멀을 탄젠트 자리에 실어 둡니다.
-        // 켜면 원본 노멀을 UV3 대신 탄젠트에서 읽습니다. 이때 노멀맵은 쓸 수 없습니다(_NormalStrength 0).
-        [Toggle] _OrigFromTangent ("원본 노멀을 탄젠트에서 읽기 (스킨 메시)", Float) = 0
+        // 고개를 돌리면 코 음영과 외곽선이 어긋나므로, 변환 도구는 원본 노멀을 노멀·탄젠트 기준 방향(탄젠트 공간)으로 UV4 에 실어 둡니다.
+        // 켜면 원본 노멀을 UV3 대신 UV4 에서 읽어 지금의 노멀·탄젠트로 되돌립니다. 탄젠트는 진짜 탄젠트라 노멀맵도 쓸 수 있습니다.
+        [Toggle] _OrigTangentSpace ("원본 노멀을 UV4(탄젠트 공간)에서 읽기 (스킨 메시)", Float) = 0
         // 얼굴과 몸이 한 메시·한 재질인 캐릭터용 (믹사모: 머리·목·손이 한 메시). 켜면 얼굴 명암선·가장자리 띠·림을
         // 정점의 얼굴 가중치(UV2.x, 변환 도구가 넣음)만큼만 적용하고, 나머지는 일반 밴드 명암으로 둡니다.
         [Toggle] _FaceWeightOn ("얼굴 명암을 얼굴 가중치(UV2.x)만큼만", Float) = 0
@@ -111,6 +112,13 @@ Shader "NormalTest/ToonBand"
         [Toggle] _EmissionOn ("발광 맵 더하기", Float) = 0
         [NoScaleOffset] _EmissionMap ("발광 맵", 2D) = "black" {}
         _EmissionColor ("발광 색 (리니어 배율)", Vector) = (1, 1, 1, 0)
+        // URP 조명 모드 (4단계): 켜면 _LightDir 대신 씬의 메인 라이트(방향·색·받는 그림자)를 쓴다. 점·스폿 조명은 받지 않는다.
+        // 끄면(기본) 예전과 똑같은 블렌더 대조 모드다. 명암의 모양(밴드 경계, 얼굴 명암선, 코 음영)은 두 모드가 같은 식을 쓴다.
+        [Toggle] _UrpLighting ("URP 조명 받기 (0이면 블렌더 대조 모드)", Float) = 0
+        _LightMaxLimit ("빛 밝기 상한 (색조는 두고 가장 밝은 채널을 이 값까지)", Range(0.1, 4)) = 1
+        _ShadowReceive ("받는 그림자 세기 (몸)", Range(0,1)) = 1
+        // 얼굴은 기본으로 받지 않는다: 코가 볼에 드리운 그림자가 그림자 맵 해상도대로 번진 얼룩처럼 보였다 (Ch07).
+        _FaceShadowReceive ("받는 그림자 세기 (얼굴, 얼굴 가중치만큼)", Range(0,1)) = 0
     }
 
     SubShader
@@ -128,10 +136,18 @@ Shader "NormalTest/ToonBand"
             HLSLPROGRAM
             #pragma vertex vert
             #pragma fragment frag
+            // URP 조명 모드용. 블렌더 대조 모드는 이 키워드와 상관없이 같은 값을 낸다.
+            #pragma multi_compile _ _MAIN_LIGHT_SHADOWS _MAIN_LIGHT_SHADOWS_CASCADE
+            #pragma multi_compile_fragment _ _SHADOWS_SOFT _SHADOWS_SOFT_LOW _SHADOWS_SOFT_MEDIUM _SHADOWS_SOFT_HIGH
+            // 점·스폿 조명은 안 받지만 이 키워드는 둔다: 포워드+ 에서 이것 없이 컴파일하면 GetMainLight 가 세기를
+            // unity_LightData 에서 읽는데, 포워드+ 는 그 값을 채우지 않아 메인 라이트가 0 이 되고 URP 조명 모드가 검게 나왔다.
+            #pragma multi_compile _ _CLUSTER_LIGHT_LOOP
             #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
+            #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Lighting.hlsl"
 
             // Core.hlsl 은 Color.hlsl 을 끌고 오지 않습니다. LinearToSRGB 를 쓰려면 직접 넣어야 합니다.
             #include "Packages/com.unity.render-pipelines.core/ShaderLibrary/Color.hlsl"
+            #include "OriginalNormals.hlsl"
 
             TEXTURE2D(_NormalMap);
             SAMPLER(sampler_NormalMap);
@@ -140,76 +156,7 @@ Shader "NormalTest/ToonBand"
             TEXTURE2D(_EmissionMap);
             SAMPLER(sampler_EmissionMap);
 
-            CBUFFER_START(UnityPerMaterial)
-                float4 _LightDir;
-                float  _Stop1;
-                float  _Stop2;
-                float4 _Band0;
-                float4 _Band1;
-                float4 _Band2;
-                float4 _FaceForward;
-                float4 _FaceCenter;
-                float  _FaceFlat;
-                float  _EdgeDark;
-                float  _EdgeWidth;
-                float  _EdgeTaper;
-                float  _EdgeSoft;
-                float  _RimLight;
-                float  _RimWidth;
-                float  _OrigBlend;
-                float  _OrigLo;
-                float  _OrigHi;
-                float  _FaceCurve;
-                float4 _FaceUp;
-                float  _CurveStop;
-                float  _CurveSoft;
-                float  _CurveTilt;
-                float  _ChinScale;
-                float  _ChinBend;
-                float  _AnchorOn;
-                float  _AnchorFix;
-                float4 _AnchorLight;
-                float4 _RadialCenter;
-                float4 _AnchorCA;
-                float4 _AnchorCB;
-                float4 _AnchorJA;
-                float4 _AnchorJB;
-                float  _AnchorTopSlope;
-                float  _AnchorGain;
-                float  _AnchorSoft;
-                float  _NoseShade;
-                float4 _NoseTip;
-                float4 _NoseRadius;
-                float  _NoseStop;
-                float  _NoseDebug;
-                float  _NoseMoon;
-                float4 _NoseMoonShape;
-                float4 _NoseMoonParam;
-                float4 _NoseMoonExtra;
-                float4 _NosePolyA;
-                float4 _NosePolyB;
-                float4 _NosePolyParam;
-                float  _EyeAvoid;
-                float4 _EyeA;
-                float4 _EyeB;
-                float4 _EyeRadius;
-                float  _NormalStrength;
-                float  _ShowNormal;
-                float  _UseOrigNormal;
-                float  _AlbedoOn;
-                float  _Posterize;
-                float  _PosterizeLum;
-                float  _Saturation;
-                float  _Lift;
-                float  _Flatten;
-                float  _FlattenMip;
-                float  _Cutout;
-                float  _Cutoff;
-                float  _OrigFromTangent;
-                float  _FaceWeightOn;
-                float  _EmissionOn;
-                float4 _EmissionColor;
-            CBUFFER_END
+            #include "ToonBandInput.hlsl"   // 재질 값 (네 패스가 같은 UnityPerMaterial 을 써야 SRP Batcher 를 탄다)
 
             struct Attributes
             {
@@ -219,6 +166,7 @@ Shader "NormalTest/ToonBand"
                 float2 uv         : TEXCOORD0;
                 float2 faceW      : TEXCOORD2;   // x = 얼굴 가중치 (변환 도구가 넣음, 없으면 0)
                 float3 origOS     : TEXCOORD3;   // 임포트 때 심어 둔 원본 노멀
+                float3 origTS     : TEXCOORD4;   // 변환 도구가 탄젠트 공간으로 실어 둔 원본 노멀 (_OrigTangentSpace)
             };
 
             struct Varyings
@@ -290,12 +238,22 @@ Shader "NormalTest/ToonBand"
                 return (1.0 - smoothstep(0.25, 1.0, sqrt(ex * ex + ey * ey))) * front;
             }
 
+            // URP 조명 모드: 빛 색의 색조는 두고 가장 밝은 채널만 _LightMaxLimit 까지 누른다.
+            // 센 빛(이 프로젝트 라이트는 강도 2)에서도 밴드 색이 텍스처보다 밝게 날리지 않는다 (툰 셰이더들의 관례).
+            float3 ToonTint(float3 col)
+            {
+                float m = max(col.r, max(col.g, col.b));
+                return (m > _LightMaxLimit) ? col * (_LightMaxLimit / m) : col;
+            }
+
             Varyings vert (Attributes v)
             {
                 Varyings o;
                 o.positionCS = TransformObjectToHClip(v.positionOS.xyz);
                 o.positionWS = TransformObjectToWorld(v.positionOS.xyz);
-                o.origWS     = TransformObjectToWorldNormal(_OrigFromTangent > 0.5 ? v.tangentOS.xyz : v.origOS);
+                // UV4 가 비어 있으면(예전 메시) UV3 을 씁니다.
+                float3 origOS = (_OrigTangentSpace > 0.5 && dot(v.origTS, v.origTS) > 0.25) ? DecodeOriginalNormal(v.origTS, v.normalOS, v.tangentOS) : v.origOS;
+                o.origWS     = TransformObjectToWorldNormal(origOS);
                 o.normalWS   = TransformObjectToWorldNormal(v.normalOS);
                 float3 tWS   = TransformObjectToWorldDir(v.tangentOS.xyz);
                 // 음수 스케일이 걸린 오브젝트에서 bitangent 가 뒤집히는 것을 보정합니다.
@@ -311,8 +269,7 @@ Shader "NormalTest/ToonBand"
 
                 float3 n = normalize(i.normalWS);
 
-                // _OrigFromTangent 일 때는 탄젠트 자리에 원본 노멀이 들어 있어 TBN 을 만들 수 없습니다 (노멀맵 꺼짐).
-                if (_NormalStrength > 0.0001 && _OrigFromTangent < 0.5)
+                if (_NormalStrength > 0.0001)
                 {
                     // URP LitForwardPass 와 같은 구성입니다.
                     // 보간값을 정규화하지도, 탄젠트를 노멀에 재직교화하지도 않습니다.
@@ -338,6 +295,17 @@ Shader "NormalTest/ToonBand"
                 }
 
                 float3 l = normalize(_LightDir.xyz);
+                // URP 조명 모드: 방향은 메인 라이트에서, 색과 받은 그림자는 아래 밴드에 쓴다.
+                bool   urp = _UrpLighting > 0.5;
+                float3 lightTint = 1.0;
+                float  shadowAtten = 1.0;
+                if (urp)
+                {
+                    Light ml = GetMainLight(TransformWorldToShadowCoord(i.positionWS), i.positionWS, half4(1, 1, 1, 1));
+                    l = ml.direction;
+                    lightTint = ToonTint(ml.color * ml.distanceAttenuation);
+                    shadowAtten = ml.shadowAttenuation;
+                }
                 // 조명용 노멀. _FaceFlat 이 1 이면 얼굴 전체가 정면 벡터 하나로 조명돼 한 톤이 됩니다 (서브컬처 관례).
                 float3 nLight = n;
                 if (_OrigBlend > 0.0001)
@@ -354,6 +322,15 @@ Shader "NormalTest/ToonBand"
                 float3 c = _Band0.rgb;
                 if (ndotl >= _Stop1) c = _Band1.rgb;
                 if (ndotl >= _Stop2) c = _Band2.rgb;
+                // URP 조명 모드: 받은 그림자 안은 밝은 밴드가 그림자 밴드로 한 단 내려간다 (더 어두운 단은 그대로).
+                // 그림자 맵 가장자리의 부드러운 구간 가운데에서 짧게 넘겨 툰처럼 경계를 세운다.
+                float shBody = 1.0, shFace = 1.0;
+                if (urp)
+                {
+                    shBody = smoothstep(0.35, 0.65, lerp(1.0, shadowAtten, _ShadowReceive));
+                    shFace = smoothstep(0.35, 0.65, lerp(1.0, shadowAtten, _FaceShadowReceive));
+                    c = lerp((ndotl >= _Stop1) ? _Band1.rgb : _Band0.rgb, c, shBody);
+                }
 
                 // 서브컬처 얼굴 명암선 (46번). 45번(_OrigBlend)은 원본 노멀의 밝기를 기준으로 두 노멀을 섞어서,
                 // 원본 노멀의 요철이 그대로 경계선에 옮겨 붙었다(입꼬리의 홈). 경계는 정리된 노멀 하나로만 정한다.
@@ -528,6 +505,7 @@ Shader "NormalTest/ToonBand"
                             noseDbg = mN;
                         }
                     }
+                    if (urp) lit = min(lit, shFace);
                     float3 cFace = lerp(_Band1.rgb, _Band2.rgb, lit);
                     // 얼굴 가중치를 쓰면 얼굴 밖(목 아래·손)은 위에서 구한 일반 밴드 명암으로 남는다. 끄면 예전과 똑같이 전부 얼굴 명암.
                     if (_FaceWeightOn > 0.5) c = lerp(c, cFace, saturate(i.faceW)); else c = cFace;
@@ -568,6 +546,9 @@ Shader "NormalTest/ToonBand"
                     if (_FaceWeightOn > 0.5) kRim *= saturate(i.faceW);
                 }
 
+                // URP 조명 모드: 메인 라이트 색을 곱한다. 점·스폿 조명은 받지 않는다. 더해 보니 빛마다 얼굴에 경계선이 하나씩 더 생기고,
+                // 램프 그림자가 앞머리째 이마에 찍혔다 (여러 광원 시험). 여러 광원 장면은 UTS·lilToon 쪽 몫으로 둔다.
+                if (urp) c *= lightTint;
                 if (_AlbedoOn > 0.0001)
                 {
                     float3 a = SAMPLE_TEXTURE2D(_Albedo, sampler_Albedo, i.uv).rgb;
@@ -619,7 +600,8 @@ Shader "NormalTest/ToonBand"
         //
         // 여기서 일부러 '원본' 노멀을 내보냅니다. 화면에 칠할 때는 평탄화한 노멀을 쓰고,
         // 선을 찾을 때는 원본을 쓰는 겁니다. 그러면 평탄화로 지워진 형태가
-        // 정확히 그 자리에 선으로 돌아옵니다. 원본 노멀은 임포트 때 UV3 에 실어 둡니다.
+        // 정확히 그 자리에 선으로 돌아옵니다. 원본 노멀은 UV3(물체 공간) 또는 UV4(탄젠트 공간, 스킨 메시)에 실어 둡니다.
+        // 외곽선용 노멀을 만드는 식은 LineNormal.hlsl 에 있고, 외곽선 피처의 원본 노멀 패스(LineNormals.shader)도 같은 식을 씁니다.
         Pass
         {
             Name "DepthNormals"
@@ -636,30 +618,18 @@ Shader "NormalTest/ToonBand"
             TEXTURE2D(_Albedo);
             SAMPLER(sampler_Albedo);
 
-            CBUFFER_START(UnityPerMaterial)
-                float4 _LightDir;
-                float  _Stop1;
-                float  _Stop2;
-                float4 _Band0;
-                float4 _Band1;
-                float4 _Band2;
-                float  _NormalStrength;
-                float  _ShowNormal;
-                float  _UseOrigNormal;
-                float  _OutlineFlatNormal;
-                float  _Cutout;
-                float  _Cutoff;
-                float  _OrigFromTangent;
-                float4 _InnerLineFade;
-                float  _FaceWeightOn;
-            CBUFFER_END
+            #include "ToonBandInput.hlsl"
+
+            #include "OriginalNormals.hlsl"
+            #include "LineNormal.hlsl"
 
             struct dnAttributes
             {
                 float4 positionOS : POSITION;
                 float3 normalOS   : NORMAL;
-                float4 tangentOS  : TANGENT;     // _OrigFromTangent 일 때 원본 노멀이 여기 들어 있다 (스킨 메시)
+                float4 tangentOS  : TANGENT;     // UV4 의 원본 노멀을 되돌릴 축 (스킨 메시)
                 float3 origOS     : TEXCOORD3;   // 임포트 때 심어 둔 원본 노멀
+                float3 origTS     : TEXCOORD4;   // 탄젠트 공간 원본 노멀 (_OrigTangentSpace)
                 float2 uv         : TEXCOORD0;
                 float2 faceW      : TEXCOORD2;   // x = 얼굴 가중치, y = 피부 메시 전체 1 (안쪽 선 지우기용). 변환 도구가 넣음, 없으면 0
             };
@@ -676,38 +646,12 @@ Shader "NormalTest/ToonBand"
                 dnVaryings o;
                 o.positionCS = TransformObjectToHClip(v.positionOS.xyz);
                 o.uv = v.uv;
-                float3 orig = (_OrigFromTangent > 0.5) ? v.tangentOS.xyz : v.origOS;
+                // UV4 가 비어 있으면(예전 메시) UV3 을 씁니다.
+                float3 orig = (_OrigTangentSpace > 0.5 && dot(v.origTS, v.origTS) > 0.25) ? DecodeOriginalNormal(v.origTS, v.normalOS, v.tangentOS) : v.origOS;
                 float3 src = (_UseOrigNormal > 0.5) ? orig : v.normalOS;
                 // UV3 가 비어 있으면 (0,0,0) 이므로 그때는 메시 노멀로 되돌립니다.
                 if (dot(src, src) < 1e-8) src = v.normalOS;
-                if (_OutlineFlatNormal > 0.5)
-                {
-                    // 정점마다 카메라를 향하는 벡터. 메시 안에서 매끄럽게 변하므로 소벨이 잡을 노멀 엣지가 없습니다.
-                    float3 pw = TransformObjectToWorld(v.positionOS.xyz);
-                    o.normalWS = normalize(_WorldSpaceCameraPos - pw);
-                    return o;
-                }
-                o.normalWS = TransformObjectToWorldNormal(src);
-                if (_InnerLineFade.y > 1e-7)
-                {
-                    float3 pw = TransformObjectToWorld(v.positionOS.xyz);
-                    float  dv = abs(TransformWorldToView(pw).z);
-                    // 픽셀 하나가 덮는 실제 크기 (미터). 원근: 2 d / (P11 x 화면 높이), 직교: 2 x 반높이 / 화면 높이
-                    float  fp = (unity_OrthoParams.w > 0.5) ? (2.0 * unity_OrthoParams.y / _ScreenParams.y)
-                                                            : (2.0 * dv / (abs(UNITY_MATRIX_P[1][1]) * _ScreenParams.y));
-                    float  t  = (_InnerLineFade.y > _InnerLineFade.x) ? smoothstep(_InnerLineFade.x, _InnerLineFade.y, fp) : step(_InnerLineFade.y, fp);
-                    // 얼굴 재질을 받는 피부 메시만 지운다(리그가 _InnerLineFade 를 얼굴 재질 칸에만 넣으므로 옷 메시는 이 블록에 오지 않는다).
-                    // 얼굴(x)은 원래 거리에서, 나머지 피부(y: 목·손·발목 등)는 얼굴의 두 배 거리에서부터 지운다 — 얼굴만 지우면 게임 거리에서
-                    // 작게 보이는 피부가 선 색 덩어리로 남았고(Ch07 툰, 2026-10-14), 같은 거리로 지우면 클로즈업에서 턱선(얼굴과 목의 노멀 차)이 흐려졌다.
-                    // y 가 없는 예전 메시는 0 이라 x 만 쓴 것과 같고, 얼굴 정점(x=y=1)은 두 배 거리의 비중이 늘 더 작아 예전과 같다.
-                    if (_FaceWeightOn > 0.5)
-                    {
-                        float2 fn = _InnerLineFade.xy * 2.0;
-                        float  tn = (fn.y > fn.x) ? smoothstep(fn.x, fn.y, fp) : step(fn.y, fp);
-                        t = max(t * saturate(v.faceW.x), tn * saturate(v.faceW.y));
-                    }
-                    o.normalWS = normalize(lerp(o.normalWS, normalize(_WorldSpaceCameraPos - pw), t));
-                }
+                o.normalWS = LineNormalWS(v.positionOS.xyz, src, v.faceW);
                 return o;
             }
 
@@ -740,10 +684,7 @@ Shader "NormalTest/ToonBand"
             TEXTURE2D(_Albedo);
             SAMPLER(sampler_Albedo);
 
-            CBUFFER_START(UnityPerMaterial)
-                float  _Cutout;
-                float  _Cutoff;
-            CBUFFER_END
+            #include "ToonBandInput.hlsl"
 
             // URP 가 그림자 패스 때 넣어 주는 값 (디렉셔널은 방향, 점·스폿은 위치)
             float3 _LightDirection;
@@ -803,10 +744,7 @@ Shader "NormalTest/ToonBand"
             TEXTURE2D(_Albedo);
             SAMPLER(sampler_Albedo);
 
-            CBUFFER_START(UnityPerMaterial)
-                float  _Cutout;
-                float  _Cutoff;
-            CBUFFER_END
+            #include "ToonBandInput.hlsl"
 
             struct doAttributes
             {

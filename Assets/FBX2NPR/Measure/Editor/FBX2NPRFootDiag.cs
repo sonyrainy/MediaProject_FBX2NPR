@@ -466,7 +466,7 @@ namespace FBX2NPR.EditorTools
             return Vector3.SignedAngle(Vector3.forward, -fwd, Vector3.up);
         }
         /// <summary>골반 높이: 골반 − 가장 낮은 발·발가락</summary>
-        static float PelvisHeight(Transform[] b)
+        internal static float PelvisHeight(Transform[] b)
         {
             float low = float.MaxValue; foreach (int i in new[] { 2, 5, 7, 8 }) if (b[i] != null) low = Mathf.Min(low, b[i].position.y);
             return b[6] != null && low < float.MaxValue ? b[6].position.y - low : 0f;
@@ -520,14 +520,14 @@ namespace FBX2NPR.EditorTools
             }
         }
 
-        static AnimationClip Clip(string path)
+        internal static AnimationClip Clip(string path)
         {
             foreach (var o in AssetDatabase.LoadAllAssetsAtPath(path)) { var c = o as AnimationClip; if (c != null && !c.name.StartsWith("__preview__")) return c; }
             return null;
         }
 
         /// <summary>Humanoid 클립을 플레이어블 그래프로 한 시각에 평가 (런타임 컨트롤러 상태처럼 발 IK 끔)</summary>
-        static void SampleHuman(GameObject go, AnimationClip clip, float time)
+        internal static void SampleHuman(GameObject go, AnimationClip clip, float time)
         {
             var an = go.GetComponent<Animator>(); if (an == null) an = go.AddComponent<Animator>();
             an.applyRootMotion = false; an.cullingMode = AnimatorCullingMode.AlwaysAnimate; an.enabled = true; an.Rebind();   // 편집 모드에서는 화면에 안 보이면 갱신을 건너뛰므로 AlwaysAnimate
@@ -543,7 +543,7 @@ namespace FBX2NPR.EditorTools
         }
 
         /// <summary>다리 뼈 (0 왼허벅지 1 왼종아리 2 왼발 3 오른허벅지 4 오른종아리 5 오른발 6 골반 7 왼발가락 8 오른발가락). 휴머노이드 매핑 우선, 없으면 믹사모 이름</summary>
-        static Transform[] Bones(GameObject go)
+        internal static Transform[] Bones(GameObject go)
         {
             var an = go.GetComponent<Animator>();
             var hb = new[] { HumanBodyBones.LeftUpperLeg, HumanBodyBones.LeftLowerLeg, HumanBodyBones.LeftFoot, HumanBodyBones.RightUpperLeg, HumanBodyBones.RightLowerLeg, HumanBodyBones.RightFoot, HumanBodyBones.Hips, HumanBodyBones.LeftToes, HumanBodyBones.RightToes };

@@ -1,6 +1,6 @@
 // FBX2NPRParseBake.cs — 얼굴 파싱 라벨을 텍스처(UV) 공간으로 옮긴다 (2026-10-08).
 //   1) 머리를 여러 방향에서 찍어 얼굴 파싱(FaceParser)으로 화소별 클래스 확률을 얻고,
-//   2) 같은 카메라로 '월드 위치' 데이터 패스를 따로 그려(ParseWorldPos.shader, DrawMeshNow) 무엇이 보이는지 알아낸 뒤,
+//   2) 같은 카메라로 '월드 위치' 데이터 패스를 따로 그려(ParseWorldPos.shader, 커맨드 버퍼) 무엇이 보이는지 알아낸 뒤,
 //   3) 텍스처의 텍셀마다(UV 래스터화로 얻은 월드 위치·법선) 각 뷰로 역투영해 보이는 뷰의 확률을 코사인 가중 평균하고 argmax 한다.
 // 결과는 텍셀별 라벨(0~18, 255 = 어느 뷰에서도 안 보임), 덮임(가중치 합), 마진(1등−2등). 안 보인 텍셀은 이웃 라벨로 메우되 '메움' 표시를 남긴다.
 // 프로젝트 에셋은 바꾸지 않는다. 호출하는 쪽이 씬에 원본 인스턴스를 세워 두고 넘긴다(비교 렌더와 같은 조명이면 된다).
@@ -52,6 +52,7 @@ namespace FBX2NPR.EditorTools
             public List<TexResult> textures = new List<TexResult>();
             public List<string> log = new List<string>();
             public float alignMismatch = -1f;               // 색 렌더와 데이터 패스의 실루엣 불일치 비율(정면). 커지면 투영이 어긋난 것
+            public bool dataEmpty;                          // 정면 데이터 패스에 지오메트리가 하나도 없다: 라벨을 텍스처로 옮길 수 없다
         }
 
         class Slot { public string name; public Mesh mesh; public Matrix4x4 l2w; public int sub; public bool cutout; public float cutoff; public Texture albedo; }
@@ -95,12 +96,15 @@ namespace FBX2NPR.EditorTools
             }
             if (!any) return false;
             var b0 = bounds; var near = new Bounds(b0.center, b0.size * 1.5f);
-            foreach (var mf in root.GetComponentsInChildren<MeshFilter>(true))
+            foreach (var r in root.GetComponentsInChildren<Renderer>(true))
             {
-                var r = mf.GetComponent<Renderer>(); if (r == null || mf.sharedMesh == null || !mf.gameObject.activeInHierarchy) continue;
-                if (crit.IsIgnoredMesh(mf.name)) continue;
+                // 정적 메시와, 본에 묶이지 않은 스킨 메시(표정만 있는 메시 — 표정을 켠 유니티짱 얼굴). 본에 묶인 스킨 메시는 위에서 셌다.
+                var smr = r as SkinnedMeshRenderer; var mf = smr == null ? r.GetComponent<MeshFilter>() : null;
+                var mesh = smr != null ? smr.sharedMesh : (mf != null ? mf.sharedMesh : null);
+                if (mesh == null || !r.gameObject.activeInHierarchy || (smr != null && FaceMeshRule.HasSkin(smr, mesh))) continue;
+                if (crit.IsIgnoredMesh(r.name)) continue;
                 var rb = r.bounds;
-                if (near.Contains(rb.center) && rb.size.magnitude <= b0.size.magnitude) { bounds.Encapsulate(rb); count += mf.sharedMesh.vertexCount; }
+                if (near.Contains(rb.center) && rb.size.magnitude <= b0.size.magnitude) { bounds.Encapsulate(rb); count += mesh.vertexCount; }
             }
             return true;
         }
@@ -161,6 +165,10 @@ namespace FBX2NPR.EditorTools
                 if (vds.Count == 0) { log.Add("뷰를 하나도 못 찍음"); return res; }
                 // 정렬 검사: 정면 뷰의 '배경이 아닌 화소'와 데이터 패스의 '지오메트리 있음'이 얼마나 다른가
                 res.alignMismatch = vds[0].probs != null ? AlignCheck(vds[0], log) : -1f;
+                // 데이터 패스가 아무것도 못 그리면 모든 텍셀이 '관측 0%' 가 되어 라벨 없이 평탄화된다. 오류 없이 결과만 달라지므로 따로 알린다 (커맨드 버퍼로 바꾼 뒤에도 안전장치로 둔다).
+                // 실측(2026-10-30): 숨김 창으로 띄운 D3D12 에디터에서 GL 즉시 그리기가 비었고, Ch07 이 라벨 없이 평탄화돼 얼굴이 1.28% 달라졌다.
+                int geo = 0; var d0 = vds[0].data; for (int i = 3; i < d0.Length; i += 4) if (d0[i] > 0.5f) geo++;
+                if (geo == 0) { res.dataEmpty = true; log.Add("  데이터 패스가 비었음: 지오메트리 화소 0 — 라벨을 텍스처로 옮길 수 없어 쓰지 않는다 (에디터 그래픽 상태 확인: 숨김 창 등)"); }
 
                 // 3) 텍스처별 역투영
                 var byTex = new Dictionary<Texture, List<Slot>>();
@@ -265,20 +273,23 @@ namespace FBX2NPR.EditorTools
         static float[] RenderData(Camera cam, List<Slot> slots, Material dataMat)
         {
             var rt = new RenderTexture(DataRes, DataRes, 24, RenderTextureFormat.ARGBFloat, RenderTextureReadWrite.Linear); rt.Create();
-            var prev = RenderTexture.active;
-            Graphics.SetRenderTarget(rt);
-            GL.Clear(true, true, new Color(0f, 0f, 0f, 0f));
-            GL.PushMatrix();
-            GL.LoadProjectionMatrix(cam.projectionMatrix);
-            GL.modelview = cam.worldToCameraMatrix;
+            // 커맨드 버퍼로 그린다. 예전의 GL 즉시 그리기(DrawMeshNow)는 에디터 창이 숨김이거나 최소화되면 D3D12 에서 아무것도 안 그리거나 일부만 그렸다
+            // (2026-10-30 숨김 창: 0 화소, 2026-10-31 최소화: 정육면체 시험 1721/14840 화소, GL.Viewport 로도 안 고쳐짐). 그러면 라벨 없이 평탄화돼 결과가 달라졌다.
+            // 커맨드 버퍼는 두 경우 모두 다 그렸고, 색 렌더와 방향도 같다 (정육면체 시험 IoU 0.977, 뒤집힘 없음).
+            var cb = new CommandBuffer { name = "FBX2NPR parse data pass" };
+            var mpb = new MaterialPropertyBlock();
+            cb.SetRenderTarget(rt);
+            cb.ClearRenderTarget(true, true, new Color(0f, 0f, 0f, 0f));
+            cb.SetViewProjectionMatrices(cam.worldToCameraMatrix, cam.projectionMatrix);
             foreach (var s in slots)
             {
-                dataMat.SetFloat("_AlphaClip", s.cutout ? 1f : 0f); dataMat.SetFloat("_Cutoff", s.cutoff);
-                dataMat.SetTexture("_BaseMap", s.cutout ? s.albedo : null);
-                if (!dataMat.SetPass(0)) continue;
-                Graphics.DrawMeshNow(s.mesh, s.l2w, s.sub);
+                mpb.Clear();
+                mpb.SetFloat("_AlphaClip", s.cutout ? 1f : 0f); mpb.SetFloat("_Cutoff", s.cutoff);
+                if (s.cutout && s.albedo != null) mpb.SetTexture("_BaseMap", s.albedo);
+                cb.DrawMesh(s.mesh, s.l2w, dataMat, s.sub, 0, mpb);
             }
-            GL.PopMatrix();
+            Graphics.ExecuteCommandBuffer(cb); cb.Release();
+            var prev = RenderTexture.active; RenderTexture.active = rt;
             var t = new Texture2D(DataRes, DataRes, TextureFormat.RGBAFloat, false, true);
             t.ReadPixels(new Rect(0, 0, DataRes, DataRes), 0, 0); t.Apply();
             RenderTexture.active = prev;

@@ -55,6 +55,8 @@ namespace FBX2NPR.EditorTools
 
         static readonly StringBuilder Log = new StringBuilder();
         static void L(string m) { Log.AppendLine(m); Console.WriteLine("[gen] " + m); }
+        // 마지막 실행의 얼굴 마스크 안 성분 수: 캐릭터 -> 조건("mix0.0" 등) -> [정면, 측면]. 회귀 테스트가 읽는다.
+        internal static readonly Dictionary<string, Dictionary<string, int[]>> LastComps = new Dictionary<string, Dictionary<string, int[]>>();
         // 외곽선 변형 실험용. FBX2NPR_VARIANT = depthonly(노멀 엣지 끔) / thin(두께 0.5) / silface(얼굴도 실루엣만). 결과는 gen6_<variant>.
         static string Variant { get { var v = Environment.GetEnvironmentVariable("FBX2NPR_VARIANT"); return string.IsNullOrEmpty(v) ? "" : v.Trim().ToLowerInvariant(); } }
         static bool HasTok(string t) { foreach (var x in Variant.Split('+')) if (x == t) return true; return false; }
@@ -64,7 +66,7 @@ namespace FBX2NPR.EditorTools
         // sub: 서브컬처 얼굴 조명 — 얼굴 조명 노멀을 정면 벡터로 고정(한 톤) + 빛 반대쪽 실루엣만 한 단계 어둡게. 얼굴 메시에만.
         static bool SubFace { get { return HasTok("sub"); } }
         static Vector3 FaceCenterW;   // sub 모드의 띠 방향 기준 (머리 바운드 중심)
-        static bool UtsLight;         // uts 모드: 리그에 디렉셔널 라이트를 넣는다 (UTS 는 씬 라이트를 쓴다)
+        static bool SceneLight;       // uts·lil 모드: 리그에 디렉셔널 라이트를 넣는다 (UTS·lilToon 은 씬 라이트를 쓴다)
         // wNN 토큰: 가장자리 폭 임계값 NN/100 (기본 0.55). 예: sub+w40
         static float EdgeWidth { get { foreach (var x in Variant.Split('+')) { int n; if (x.Length > 1 && x[0] == 'w' && int.TryParse(x.Substring(1), out n)) return n / 100f; } return 0.95f; } }
         static float Tok(char c, float def) { foreach (var x in Variant.Split('+')) { int n; if (x.Length > 1 && x[0] == c && int.TryParse(x.Substring(1), out n)) return n / 100f; } return def; }
@@ -157,7 +159,7 @@ namespace FBX2NPR.EditorTools
         [MenuItem("FBX2NPR/3체 일반화 실험")]
         public static void Run()
         {
-            Log.Clear();
+            Log.Clear(); LastComps.Clear();
             Directory.CreateDirectory(OutDir);
             try
             {
@@ -204,6 +206,8 @@ namespace FBX2NPR.EditorTools
             var imp = AssetImporter.GetAtPath(path);
             var crit = FBX2NPRAssetSettings.FromJson(imp != null ? imp.userData : null) ?? new FBX2NPRAssetSettings();
             L("  얼굴 판정 규칙: 재질 포함=[" + crit.faceMaterialContains + "] 메시 제외=[" + crit.excludeMeshContains + "]" + (imp != null && !string.IsNullOrEmpty(imp.userData) ? " (meta userData)" : " (기본값)"));
+            // 스킨 메시의 좌표 → 지금 자세의 월드는 변환기와 같은 행렬로 (메시 오브젝트 트랜스폼과 '본 x 바인드 포즈'가 다른 모델: Galaxia)
+            var headBone = FBX2NPRConverter.FindHeadBone(inst.transform, crit.headBoneContains);
 
             // UV3 점유 확인 (원본 노멀을 심을 자리)
             bool uv3Dup = true, uv3Any = false;
@@ -216,7 +220,7 @@ namespace FBX2NPR.EditorTools
                 p.name = src.name;
                 p.mesh = UnityEngine.Object.Instantiate(src);
                 p.origN = p.mesh.normals;
-                p.l2w = smr.transform.localToWorldMatrix;
+                float bindDiff; p.l2w = FBX2NPRConverter.BindToWorld(smr, src, headBone, out bindDiff);
                 p.albedo = ResolveAlbedo(smr.sharedMaterial, path, crit);
 
                 var uv0 = new List<Vector4>(); var uv3 = new List<Vector4>();
@@ -229,7 +233,7 @@ namespace FBX2NPR.EditorTools
                 }
 
                 // 머리 본 가중치·얼굴 판정 — 변환기·임포터·미리보기와 같은 규칙 (FaceMeshRule). 프레이밍은 머리 본 가중치 전체로, 변환은 얼굴 메시만.
-                var fw = FaceMeshRule.Weigh(src, smr.bones, smr.sharedMaterials, crit);
+                var fw = FaceMeshRule.WeighSkinned(smr, src, inst.transform, crit);
                 p.weights = fw.face; p.boundsW = fw.head; p.headCount = fw.faceCount; p.isFace = fw.isFace;
                 if (!p.isFace) headBoneOnly += fw.headCount;
                 totalV += p.mesh.vertexCount; totalHead += p.headCount;
@@ -387,6 +391,7 @@ namespace FBX2NPR.EditorTools
                 comps[key] = new[] { CountComponents(r[0], faceMask[0]), CountComponents(r[1], faceMask[1]) };
                 compsAll[key] = new[] { CountComponents(r[0], null), CountComponents(r[1], null) };
             }
+            LastComps[c] = comps;
 
             // 비대상 불변성: mix 1 적용 후 가중치 0 정점의 노멀 각도차
             ApplyMix(parts, 1f);
@@ -538,31 +543,10 @@ namespace FBX2NPR.EditorTools
                 comps["mix0.0"][1], comps["mix1.0"][1], reduceS,
                 maxNonTarget, lineClay[1].darkFixedPct, lineAlb[1].darkerPct);
 
-            // 공식 Unity Toon Shader 로 같은 메시를 렌더: 원본 노멀(mix0) vs 정리된 노멀(mix1).
-            // 우리 외곽선은 끄고 UTS 외곽선도 0. 셰이더만 바꾸면 되는가에 대한 대조 실험.
-            if (HasTok("uts"))
-            {
-                feat.SetActive(false); Dirty();
-                var prevMode = RenderSettings.ambientMode; var prevAmb = RenderSettings.ambientLight;
-                RenderSettings.ambientMode = UnityEngine.Rendering.AmbientMode.Flat; RenderSettings.ambientLight = Color.black;
-                UtsLight = true;
-                var utsClay = new Dictionary<Part, Material>(); var utsTex = new Dictionary<Part, Material>();
-                foreach (var p in parts) { utsClay[p] = MakeUtsMat(p.albedo, true, !p.isFace); utsTex[p] = MakeUtsMat(p.albedo, false, !p.isFace); }
-                var utsComps = new Dictionary<string, int[]>();
-                foreach (var mix in new[] { 0f, 1f })
-                {
-                    ApplyMix(parts, mix);
-                    string key = "mix" + mix.ToString("0.0", CultureInfo.InvariantCulture);
-                    var rc = Shoot(parts, p => utsClay[p], bb, c + "_uts_clay_" + key);
-                    utsComps[key] = new[] { CountComponents(rc[0], faceMask[0]), CountComponents(rc[1], faceMask[1]) };
-                    Shoot(parts, p => utsTex[p], bb, c + "_uts_albedo_" + key);
-                }
-                UtsLight = false;
-                RenderSettings.ambientMode = prevMode; RenderSettings.ambientLight = prevAmb;
-                L(string.Format("  [UTS] 성분 얼굴만(정면/측면) mix0 {0}/{1}  mix1 {2}/{3}", utsComps["mix0.0"][0], utsComps["mix0.0"][1], utsComps["mix1.0"][0], utsComps["mix1.0"][1]));
-                foreach (var m in utsClay.Values) if (m != null) UnityEngine.Object.DestroyImmediate(m);
-                foreach (var m in utsTex.Values) if (m != null) UnityEngine.Object.DestroyImmediate(m);
-            }
+            // 공식 툰 셰이더(Unity Toon Shader, lilToon)로 같은 메시를 렌더: 원본 노멀(mix0) vs 정리된 노멀(mix1).
+            // 우리 외곽선은 끄고 셰이더 자체 외곽선도 0. 셰이더만 바꾸면 되는가에 대한 대조 실험.
+            if (HasTok("uts")) OtherShaderComps("uts", "UTS", MakeUtsMat, parts, bb, c, faceMask, comps, feat);
+            if (HasTok("lil")) OtherShaderComps("lil", "lilToon", MakeLilMat, parts, bb, c, faceMask, comps, feat);
 
             foreach (var o in flatTrash) if (o != null) UnityEngine.Object.DestroyImmediate(o);   // 평탄화가 만든 텍스처·재질 (mats·maskBlack 것은 아래에서)
             foreach (var p in parts) UnityEngine.Object.DestroyImmediate(p.mesh);
@@ -687,18 +671,79 @@ namespace FBX2NPR.EditorTools
             return null;
         }
 
+        // 씬 라이트를 쓰는 셰이더(UTS·lilToon)로 같은 메시를 mix0/mix1 로 찍어 얼굴 안 성분 수를 comps["<key>_mix0.0"] 등에 넣는다 (비교표가 LastComps 로 읽는다).
+        static void OtherShaderComps(string key, string label, Func<Texture, bool, bool, Material> make, List<Part> parts, Bounds bb, string c, byte[][] faceMask, Dictionary<string, int[]> comps, SobelOutlineFeature feat)
+        {
+            feat.SetActive(false); Dirty();
+            var prevMode = RenderSettings.ambientMode; var prevAmb = RenderSettings.ambientLight;
+            RenderSettings.ambientMode = UnityEngine.Rendering.AmbientMode.Flat; RenderSettings.ambientLight = Color.black;
+            SceneLight = true;
+            var clay = new Dictionary<Part, Material>(); var tex = new Dictionary<Part, Material>();
+            foreach (var p in parts) { clay[p] = make(p.albedo, true, !p.isFace); tex[p] = make(p.albedo, false, !p.isFace); }
+            var sc = new Dictionary<string, int[]>();
+            // 셰이더를 처음 쓰는 렌더는 화면 전체가 검게 나온다(2026-10-30, UTS 로 찍은 Ch07 정면 원본 노멀이 성분 0). 한 번 찍어 버리고 잰다.
+            ApplyMix(parts, 0f); Shoot(parts, p => clay[p], bb, c + "_" + key + "_warmup");
+            foreach (var d in new[] { "front", "side" }) File.Delete(Path.Combine(OutDir, c + "_" + key + "_warmup_" + d + ".png"));
+            foreach (var mix in new[] { 0f, 1f })
+            {
+                ApplyMix(parts, mix);
+                string k = "mix" + mix.ToString("0.0", CultureInfo.InvariantCulture);
+                var rc = Shoot(parts, p => clay[p], bb, c + "_" + key + "_clay_" + k);
+                sc[k] = new[] { CountComponents(rc[0], faceMask[0]), CountComponents(rc[1], faceMask[1]) };
+                Shoot(parts, p => tex[p], bb, c + "_" + key + "_albedo_" + k);
+            }
+            SceneLight = false;
+            RenderSettings.ambientMode = prevMode; RenderSettings.ambientLight = prevAmb;
+            L(string.Format("  [{4}] 성분 얼굴만(정면/측면) mix0 {0}/{1}  mix1 {2}/{3}", sc["mix0.0"][0], sc["mix0.0"][1], sc["mix1.0"][0], sc["mix1.0"][1], label));
+            foreach (var kv in sc) comps[key + "_" + kv.Key] = kv.Value;
+            foreach (var m in clay.Values) if (m != null) UnityEngine.Object.DestroyImmediate(m);
+            foreach (var m in tex.Values) if (m != null) UnityEngine.Object.DestroyImmediate(m);
+        }
+
+        /// <summary>
+        /// lilToon 재질. UTS 대조와 같은 경계·색으로 맞춘다: 1차 그림자 (0.72, 0.66, 0.70), 2차 그림자 (0.32, 0.30, 0.42).
+        /// lilToon 도 반사광(0.5*N·L+0.5)으로 경계를 정하므로 UTS 와 같은 0.74 / 0.63 을 넣는다. 그림자 색은 알베도(텍스처 × _Color)에 곱해지므로
+        /// 클레이에서도 ToonBand·UTS 와 같은 색이 되게 베이스 색으로 나눠 넣는다. 색은 UTS 와 같은 이유로 .gamma 로 넣는다.
+        /// 그림자 경계의 붉은 그러데이션(_ShadowBorderColor)과 경계 안티에일리어싱(_AAStrength)은 끈다 — 켜 두면 경계의 중간 회색이
+        /// 잘게 끊긴 성분으로 세어져 얼룩 수가 UTS 의 몇 배로 나왔다(2026-10-30).
+        /// clay 면 흰 베이스, cutout 이면 베이스맵 알파로 자른다(Hidden/lilToonCutout).
+        /// </summary>
+        internal static Material MakeLilMat(Texture tex, bool clay, bool cutout)
+        {
+            var sh = Shader.Find(cutout && tex != null ? "Hidden/lilToonCutout" : "lilToon");
+            if (sh == null) { L("  lilToon 셰이더 없음"); return null; }
+            var m = new Material(sh);
+            bool useTex = tex != null && (!clay || cutout);
+            var baseC = clay && !cutout ? new Color(1.00f, 0.96f, 0.92f) : Color.white;
+            m.SetTexture("_MainTex", useTex ? tex : Texture2D.whiteTexture);
+            m.SetColor("_Color", baseC.gamma);
+            m.SetFloat("_UseShadow", 1f); m.SetFloat("_ShadowStrength", 1f);
+            m.SetColor("_ShadowColor", new Color(0.72f / baseC.r, 0.66f / baseC.g, 0.70f / baseC.b, 1f).gamma);
+            m.SetColor("_Shadow2ndColor", new Color(0.32f / baseC.r, 0.30f / baseC.g, 0.42f / baseC.b, 1f).gamma);   // 알파 1 = 2차 그림자 켬
+            m.SetColor("_Shadow3rdColor", new Color(0f, 0f, 0f, 0f));
+            m.SetFloat("_ShadowBorder", 0.74f); m.SetFloat("_ShadowBlur", 0.0001f);
+            m.SetFloat("_Shadow2ndBorder", 0.63f); m.SetFloat("_Shadow2ndBlur", 0.0001f);
+            m.SetFloat("_AAStrength", 0f);
+            m.SetColor("_ShadowBorderColor", Color.black); m.SetFloat("_ShadowBorderRange", 0f);
+            m.SetFloat("_ShadowReceive", 0f); m.SetFloat("_ShadowEnvStrength", 0f); m.SetFloat("_ShadowMainStrength", 0f);
+            if (cutout && tex != null) m.SetFloat("_Cutoff", 0.5f);
+            return m;
+        }
+
         /// <summary>Unity Toon Shader(Toon/Toon) 재질. clay 면 흰 베이스, cutout 이면 베이스맵 알파로 클리핑(그래서 클레이여도 카드 부위는 텍스처를 쓴다).</summary>
-        static Material MakeUtsMat(Texture tex, bool clay, bool cutout)
+        internal static Material MakeUtsMat(Texture tex, bool clay, bool cutout)
         {
             var sh = Shader.Find("Toon/Toon");
             if (sh == null) { L("  UTS 셰이더 없음 (Toon/Toon)"); return null; }
             var m = new Material(sh);
             bool useTex = tex != null && (!clay || cutout);
             m.SetTexture("_MainTex", useTex ? tex : Texture2D.whiteTexture);
-            m.SetColor("_BaseColor", clay && !cutout ? new Color(1.00f, 0.96f, 0.92f) : Color.white);
+            // 색 속성은 감마 값으로 읽혀 리니어로 바뀐다(리니어 색 공간). ToonBand 밴드 색(리니어 값)과 같아지게 .gamma 로 넣는다.
+            // 그냥 넣었을 때(2026-10-30 까지)는 1·2차 그림자가 ToonBand 보다 어두워(회색 176/88, ToonBand 217/158) 성분 수에서 한 단계로 합쳐졌다.
+            m.SetColor("_BaseColor", (clay && !cutout ? new Color(1.00f, 0.96f, 0.92f) : Color.white).gamma);
             m.SetFloat("_Use_BaseAs1st", 1f); m.SetFloat("_Use_1stAs2nd", 1f);
-            m.SetColor("_1st_ShadeColor", new Color(0.72f, 0.66f, 0.70f));
-            m.SetColor("_2nd_ShadeColor", new Color(0.32f, 0.30f, 0.42f));
+            m.SetColor("_1st_ShadeColor", new Color(0.72f, 0.66f, 0.70f).gamma);
+            m.SetColor("_2nd_ShadeColor", new Color(0.32f, 0.30f, 0.42f).gamma);
             // 우리 측정 임계값(raw ndotl 0.487 / 0.267)을 UTS 의 half-lambert(0.5*x+0.5) 기준으로 환산
             m.SetFloat("_BaseColor_Step", 0.74f); m.SetFloat("_BaseShade_Feather", 0.0001f);
             m.SetFloat("_ShadeColor_Step", 0.63f); m.SetFloat("_1st2nd_Shades_Feather", 0.0001f);
@@ -745,7 +790,7 @@ namespace FBX2NPR.EditorTools
                 acd.dithering = false; acd.renderShadows = false;
                 camGo.transform.position = bb.center + dirs[d] * dist;
                 camGo.transform.rotation = Quaternion.LookRotation(bb.center - camGo.transform.position, Vector3.up);
-                if (UtsLight)
+                if (SceneLight)
                 {
                     float e = 25f * Mathf.Deg2Rad, a = 35f * Mathf.Deg2Rad;
                     var L0 = (Vector3.forward * (Mathf.Cos(e) * Mathf.Cos(a)) + Vector3.right * (Mathf.Cos(e) * Mathf.Sin(a)) + Vector3.up * Mathf.Sin(e)).normalized;

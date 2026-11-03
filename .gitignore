@@ -14,6 +14,9 @@
 *.bak*
 Backups_ToonKit/
 NormalTestOut/
+FBX2NPRNormalEdit/
+Assets/FBX2NPRTestTemp/
+Assets/FBX2NPRTestTemp.meta
 
 # 재배포 불가 에셋: 믹사모 모델·텍스처, 유니티짱(UCL), face-parsing ONNX(비상업 연구용)
 Assets/TestSet/

@@ -9,7 +9,7 @@ namespace FBX2NPR.EditorTools
     /// 서브컬처 명암선의 코 음영(46번)과 눈 피하기(47번)가 쓴다.
     /// 실험 코드(GeneralizationTest)와 미리보기 씬(ToonFacePreview)이 같은 규칙을 쓰도록 한곳에 둔다.
     ///
-    /// 코끝: 얼굴 메시 정점 중 정중선 근처에서 가장 앞(+Z)으로 나온 점.
+    /// 코끝: 얼굴 메시 정점 중 정중선 근처, 눈높이 아래에서 가장 앞(+Z)으로 나온 점 (눈을 메시로 찾았을 때).
     /// 눈: 이름에 eye·lash 가 들어간 메시(눈썹 제외)의 정점을 좌우로 나눠 중심과 크기를 잡는다.
     ///     믹사모 Ch07 은 눈이 몸 메시 안에 있어 속눈썹 메시로, The Boss 는 L/R_Eye_Geo, 유니티짱은 EYE_DEF·eye_L/R_old.
     ///     눈 메시가 없으면(Jones 는 통짜 메시) 코끝 기준 비율로 추정하고, 추정했다고 남긴다.
@@ -58,25 +58,7 @@ namespace FBX2NPR.EditorTools
             r.faceFound = true;
             Vector3 fc = r.face.center, fs = r.face.size;
 
-            // 코끝
-            float best = float.NegativeInfinity;
-            foreach (var p in parts)
-            {
-                if (!p.isFace || p.weights == null) continue;
-                for (int i = 0; i < p.world.Length; i++)
-                {
-                    if (p.weights[i] < 0.5f) continue;
-                    var rel = p.world[i] - fc;
-                    if (Mathf.Abs(rel.x) > 0.12f * fs.x) continue;
-                    if (rel.y > 0.15f * fs.y || rel.y < -0.40f * fs.y) continue;
-                    if (rel.z > best) { best = rel.z; r.noseTip = p.world[i]; r.noseFound = true; }
-                }
-            }
-            // 코 영역 반경은 눈을 찾은 뒤에 정한다 (52번, 아래).
-
-            // 턱 끝은 눈을 찾은 뒤에 구한다 (눈~코끝 거리로 찾을 높이를 정하므로).
-
-            // 눈: 이름으로 찾은 메시를 좌우로 나눈다
+            // 눈: 이름으로 찾은 메시를 좌우로 나눈다. 코끝보다 먼저 찾는다 (코끝은 눈높이 아래에서만 찾으므로).
             var a = new List<Vector3>(); var b = new List<Vector3>(); var names = new List<string>();
             foreach (var p in parts)
             {
@@ -86,7 +68,8 @@ namespace FBX2NPR.EditorTools
                 names.Add(p.name);
                 foreach (var w in p.world) { if (w.x >= fc.x) a.Add(w); else b.Add(w); }
             }
-            if (a.Count >= 8 && b.Count >= 8)
+            bool eyeMesh = a.Count >= 8 && b.Count >= 8;
+            if (eyeMesh)
             {
                 // 최소·최대 대신 5~95 백분위로 잡는다. 유니티짱 눈 메시에는 동떨어진 정점이 섞여 있어
                 // 바운드로 잡으니 눈 영역이 얼굴 전체(세로 반경 9cm)로 커졌다.
@@ -101,7 +84,32 @@ namespace FBX2NPR.EditorTools
                     0.25f * fs.z, 0f);
                 r.eyesFound = true; r.eyeSource = "메시 " + string.Join(",", names.ToArray());
             }
-            else if (r.noseFound)
+
+            // 코끝: 정중선 근처에서 가장 앞(+Z)으로 나온 점. 눈을 메시로 찾았으면 눈높이 아래에서만 찾는다.
+            // Night Dress 는 코가 작아 이마 아래쪽이 코끝보다 4mm 더 앞이라, 눈보다 4.4cm 위(이마)를 코끝으로 잡았다.
+            // 눈 아래에 후보가 없으면 예전처럼 높이 조건 없이 찾는다.
+            float eyeLine = eyeMesh ? 0.5f * (r.eyeA.y + r.eyeB.y) - 0.02f * fs.y : float.PositiveInfinity;
+            for (int pass = 0; pass < 2 && !r.noseFound; pass++)
+            {
+                float best = float.NegativeInfinity;
+                foreach (var p in parts)
+                {
+                    if (!p.isFace || p.weights == null) continue;
+                    for (int i = 0; i < p.world.Length; i++)
+                    {
+                        if (p.weights[i] < 0.5f) continue;
+                        var rel = p.world[i] - fc;
+                        if (Mathf.Abs(rel.x) > 0.12f * fs.x) continue;
+                        if (rel.y > 0.15f * fs.y || rel.y < -0.40f * fs.y) continue;
+                        if (pass == 0 && p.world[i].y > eyeLine) continue;
+                        if (rel.z > best) { best = rel.z; r.noseTip = p.world[i]; r.noseFound = true; }
+                    }
+                }
+            }
+            // 코 영역 반경은 아래(52번)에서 정한다. 턱 끝도 아래에서 구한다 (눈~코끝 거리로 찾을 높이를 정하므로).
+
+            // 눈 메시가 없으면 코끝 기준 비율로 추정한다
+            if (!eyeMesh && r.noseFound)
             {
                 float z = r.noseTip.z - 0.12f * fs.z, y = r.noseTip.y + 0.26f * fs.y;
                 r.eyeA = new Vector3(fc.x + 0.17f * fs.x, y, z);
@@ -310,7 +318,7 @@ namespace FBX2NPR.EditorTools
                 }
         }
 
-        // 코 반달 (54번): 코가 평평한 캐릭터용. 셰이더 _NoseMoonShape / _NoseMoonParam 과 같은 뜻.
+        // 코 반달 (54번): 코 그림자를 원본 노멀 대신 도형으로 그린다. 셰이더 _NoseMoonShape / _NoseMoonParam 과 같은 뜻.
         public bool moonOn;
         public Vector4 moonShape;   // x 코 중심선에서 곧은 변까지, y 중심 높이(코끝 기준), z 폭, w 반높이 (m)
         public Vector4 moonParam;   // x 기준 빛의 옆 성분 |lh·right|, y 깊이 한계 (m), z 기준 빛에서의 초승달 두께 (0~1, 1 이면 반달)
@@ -319,10 +327,12 @@ namespace FBX2NPR.EditorTools
         public string moonNote = "코 반달 안 씀";
 
         /// <summary>
-        /// 코 반달의 자리·크기를 잰다 (54번). 유니티짱처럼 코가 평평해 임계값을 올린 캐릭터(noseStop > 0.05)만.
+        /// 코 반달의 자리·크기를 잰다 (54번). 처음에는 유니티짱처럼 코가 평평해 임계값을 올린 캐릭터(noseStop > 0.05)만 썼다.
         /// 보정한 임계값에서 원본 노멀 그림자가 생기는 픽셀(사용자가 "위치는 아주 적절"하다고 한 반달)을 모아
         /// 코 중심선 쪽 가장자리(2 백분위)를 곧은 변, 바깥 끝(98 백분위)을 호의 끝, 위아래(2~98 백분위)를 높이로 쓴다.
         /// 원본 노멀 그대로는 큰 메시 면을 따라 경계가 꺾여 "사다리꼴이 돌아 있는" 모양이었다.
+        /// 2026-11-03: 코에 형태가 있는 캐릭터도 늘 도형을 쓴다. 애니풍 코(Night Dress·Miraikomachi·PronamaChan)는 메시가 작고 단순해
+        /// 원본 노멀 그림자를 그대로 그리면 빛이 옆으로 갈수록 코 옆에 모양 없는 얼룩이 커졌다. 그림자 픽셀이 모자라 자리를 못 재면 원본 노멀 그림자로 둔다.
         /// </summary>
         /// <param name="shape">0 초승달, 1 세모 (56번), 2 둥근 사다리꼴 (57번: 원래 원본 노멀 그림자의 윤곽을 사각형으로)</param>
         /// <param name="attach">콧선 쪽 기준선을 코 중심선 바로 옆(눈~코끝 높이의 2.5%)으로 붙인다. 바깥 끝은 그대로라 폭이 넓어진다.</param>
@@ -332,7 +342,7 @@ namespace FBX2NPR.EditorTools
         {
             moonOn = false;
             moonExtra = new Vector4(Mathf.Clamp(bulge, -0.9f, 0.9f), 0f, 0f, 0f);
-            if (!noseFound || noseStop <= 0.05f) { moonNote = string.Format(CultureInfo.InvariantCulture, "코 반달 안 씀 (임계값 {0:F2}, 코에 형태가 있어 원본 노멀 그림자)", noseStop); return; }
+            if (!noseFound) { moonNote = "코 반달 안 씀 (코끝 없음)"; return; }
             Vector3 up = Vector3.up, fwd = Vector3.forward, right = Vector3.Cross(up, fwd).normalized;
             Vector3 lh = lightDir - up * Vector3.Dot(lightDir, up); lh.Normalize();
             float side = Vector3.Dot(lh, right);
@@ -489,6 +499,76 @@ namespace FBX2NPR.EditorTools
         {
             if (noseFound && chinFound && noseTip.y - chinTip.y > 1e-4f) return noseTip.y - chinTip.y;
             return 0.3f * face.size.y;
+        }
+
+        // 명암선 위치 자동 보정 결과
+        public const float LineStopDefault = -0.20f;   // 변환 도구의 기본 명암선 위치 (ToonFaceRig.linePosition)
+        public const float LineStopMin = -0.55f;       // 더 낮추면 기준 빛(35°)에서 얼굴 앞반구가 통째로 밝아진다 (앞면의 수평 ndotl 최소 -sin35° = -0.57)
+        public const float LineCornerMargin = 0.30f;   // 명암선을 보낼 자리: 눈꼬리에서 눈 반폭의 30% 바깥
+        public float lineStop = LineStopDefault;
+        public string lineStopNote = "명암선 위치 보정 안 함";
+
+        /// <summary>
+        /// 명암선 위치를 캐릭터마다 확인한다. 기본 -0.20 이면 기준 빛에서 실사형(Ch07)은 선이 눈꼬리 근처를 지난다.
+        /// Emma(일반 스타일 3D)는 방사형 중심(얼굴 정점 평균, 촘촘한 눈·입 쪽으로 쏠림)이 눈 높이 표면 1.4cm 뒤라(Ch07 2.6cm)
+        /// 눈 자리 노멀이 이미 옆을 보고, 같은 -0.20 에서 선이 눈 한가운데를 갈라 눈·눈썹이 그늘에 묻혔다.
+        /// 그래서 기준 빛에서 그림자 쪽 눈 한가운데(앞면 표면점)가 그늘이면, 눈꼬리 바깥 표면점이 확실히 밝아질 만큼만 낮춘다.
+        /// 눈 한가운데가 밝으면 기본값을 그대로 둔다. 눈을 비율로 추정한 모델은 자리가 틀릴 수 있어 옮기지 않는다.
+        /// '눈 피하기'(타원 안만 밝힘)도 시험했지만 눈썹 바깥과 앞볼이 그늘로 남아 선이 눈 둘레에서 꺾였다. 선을 통째로 옮기면 한 줄로 내려간다.
+        /// radialCenter: 얼굴 방사형 노멀의 중심(월드). 얼굴 가중치 1 인 표면의 노멀은 그 중심에서 나가는 방향이다.
+        /// </summary>
+        public void CalibrateLineStop(List<Src> parts, Vector3 radialCenter, Vector3 lightDir, float chinTilt, float chinBend, float lineSoftness)
+        {
+            lineStop = LineStopDefault;
+            if (!faceFound || !noseFound || !eyesFound) { lineStopNote = "명암선 위치: 기본값 (눈·코끝 없음)"; return; }
+            if (eyesEstimated) { lineStopNote = "명암선 위치: 기본값 (눈을 비율로 추정해서 옮기지 않음)"; return; }
+            float lx = Mathf.Abs(lightDir.x), lz = lightDir.z;
+            if (lx * lx + lz * lz < 1e-8f) { lineStopNote = "명암선 위치: 기본값 (빛이 수직)"; return; }
+            float chin = ChinDrop();
+            var sb = new System.Text.StringBuilder();
+            for (int side = 0; side < 2; side++)
+            {
+                // 빛이 +X 쪽에서 오면 그림자는 -X 쪽 눈(B), 거울로 -X 쪽에서 오면 A
+                bool b = side == 0;
+                Vector3 eye = b ? eyeB : eyeA;
+                Vector3 lh = new Vector3(b ? lx : -lx, 0f, lz).normalized;
+                bool okC, okK;
+                Vector3 pc = FrontSurface(parts, new Vector2(eye.x, eye.y), out okC);
+                Vector3 pk = FrontSurface(parts, new Vector2(eye.x + (b ? -1f : 1f) * eyeHalfWidth * (1f + LineCornerMargin), eye.y), out okK);
+                if (!okC || !okK) continue;
+                float vC = HorizLit(pc - radialCenter, lh), vK = HorizLit(pk - radialCenter, lh);
+                bool moved;
+                float s = LineStopFor(vC, ChinLift(pc.y, chin, chinTilt, chinBend), vK, ChinLift(pk.y, chin, chinTilt, chinBend), lineSoftness, out moved);
+                lineStop = Mathf.Min(lineStop, s);
+                sb.AppendFormat(CultureInfo.InvariantCulture, "{0}눈 {1} 한가운데 {2:F2}{3}, 눈꼬리 바깥 {4:F2}", sb.Length > 0 ? " / " : "", b ? "B" : "A", vC, moved ? " (그늘)" : "", vK);
+            }
+            lineStopNote = string.Format(CultureInfo.InvariantCulture, "명암선 위치: {0:F2}{1} (기준 빛에서 {2})",
+                lineStop, lineStop < LineStopDefault ? " — 선이 눈을 갈라 눈꼬리 바깥으로 옮김" : " 기본값", sb);
+        }
+
+        /// <summary>
+        /// 한쪽 눈 기준의 명암선 위치. 셰이더 문턱은 위치 + 턱 보정(lift)이고, 수평 ndotl 이 문턱보다 크면 밝다.
+        /// 눈 한가운데가 밝으면 기본값 그대로(리터럴 -0.20 이어야 기존 모델이 그대로다), 그늘이면 눈꼬리 바깥이 경계 폭(softness)까지 밝아지는 값.
+        /// </summary>
+        internal static float LineStopFor(float vCenter, float liftCenter, float vCorner, float liftCorner, float softness, out bool moved)
+        {
+            moved = vCenter < LineStopDefault + liftCenter;
+            if (!moved) return LineStopDefault;
+            return Mathf.Clamp(vCorner - liftCorner - softness, LineStopMin, LineStopDefault);
+        }
+
+        // 셰이더(ToonBand HorizNdotL)와 같은 식: 방향의 수평 성분과 수평 빛의 내적, 수평 길이는 0.35 이상으로
+        static float HorizLit(Vector3 dir, Vector3 lightH)
+        {
+            Vector3 n = dir.normalized, h = new Vector3(n.x, 0f, n.z);
+            return Vector3.Dot(h, lightH) / Mathf.Max(h.magnitude, 0.35f);
+        }
+
+        // 셰이더의 턱 보정: 턱 끝에 가까울수록 문턱을 올려 선을 턱으로 모은다 (눈 높이에서는 0.01~0.02)
+        float ChinLift(float y, float chin, float chinTilt, float chinBend)
+        {
+            float hC = (y - noseTip.y) + chin;
+            return chinTilt * Mathf.Exp(Mathf.Min(-hC / Mathf.Max(chin * chinBend, 1e-4f), 8f));
         }
 
         /// <summary>축별 5~95 백분위 구간의 중심과 반폭.</summary>

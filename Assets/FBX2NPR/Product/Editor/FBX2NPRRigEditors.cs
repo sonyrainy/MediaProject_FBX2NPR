@@ -99,7 +99,7 @@ namespace FBX2NPR.EditorTools
     [CustomEditor(typeof(ToonFaceRig))]
     public class ToonFaceRigEditor : Editor
     {
-        static readonly string[] Curated = { "m_Script", "outline", "outlineDarkness", "outlineThickness", "linePosition", "chinTilt", "chinBend", "lineSoftness", "rim", "skinShadow", "bodyShadow", "bodyShadowColor" };
+        static readonly string[] Curated = { "m_Script", "outline", "outlineDarkness", "outlineThickness", "noseLineFade", "linePosition", "chinTilt", "chinBend", "lineSoftness", "rim", "urpLighting", "faceReceiveShadows", "bodyReceiveShadows", "skinShadow", "bodyShadow", "bodyShadowColor" };
         bool advanced;
 
         public override void OnInspectorGUI()
@@ -114,11 +114,13 @@ namespace FBX2NPR.EditorTools
             {
                 RigEditorUtil.Prop(serializedObject, "outlineDarkness", "먹선 진하기", "0 = 없음, 1 = 검정. 결과에 곱하므로 항상 어두워진다.");
                 RigEditorUtil.Prop(serializedObject, "outlineThickness", "먹선 두께 (px)", "픽셀 단위라 거리와 상관없이 일정하다.");
+                using (new EditorGUI.DisabledScope(rig.noseTip == null))
+                    RigEditorUtil.Prop(serializedObject, "noseLineFade", "코 둘레 선 지우기", "코 영역 안의 얼굴 안쪽 선을 지우는 정도. 코가 매끈한 실사 얼굴은 콧볼 옆 회색 얼룩이 사라진다(0.7 권장). 코 모양이 개성 있는 캐릭터는 0 으로 두어 콧볼 선을 살린다.");
             }
             if (!rig.driveOutlineSettings) EditorGUILayout.HelpBox("미리보기 씬 리그: 켜고 끄기만 하고 선 값은 렌더러 피처의 것을 씁니다.", MessageType.None);
 
             RigEditorUtil.Header("얼굴 명암선 (턱선)");
-            RigEditorUtil.Prop(serializedObject, "linePosition", "명암선 위치", "클수록 명암선이 얼굴 안쪽(빛 쪽)으로 들어온다. -0.2 기본.");
+            RigEditorUtil.Prop(serializedObject, "linePosition", "명암선 위치", "클수록 명암선이 얼굴 안쪽(빛 쪽)으로 들어온다. -0.2 기본. 기준 빛에서 선이 눈을 가르는 캐릭터는 변환 도구가 눈꼬리 바깥으로 낮춰 넣는다(변환 기록의 '명암선 위치' 줄).");
             RigEditorUtil.Prop(serializedObject, "chinTilt", "턱선 기울기", "0 = 세로 한 줄, 클수록 명암선 아래쪽이 턱 끝까지 안쪽으로 휘어 들어온다.");
             RigEditorUtil.Prop(serializedObject, "chinBend", "휘는 구간", "작을수록 턱 가까이에서 급하게 꺾이고, 클수록 위에서부터 완만하게 휜다.");
             RigEditorUtil.Prop(serializedObject, "lineSoftness", "경계 부드러움", "작을수록 명암선이 딱 끊긴다.");
@@ -126,10 +128,90 @@ namespace FBX2NPR.EditorTools
             RigEditorUtil.Header("림라이트");
             RigEditorUtil.Prop(serializedObject, "rim", "림라이트 밝기", "빛 쪽 윤곽선 안쪽을 살짝 밝게. 0 = 끔.");
 
+            RigEditorUtil.Header("조명");
+            RigEditorUtil.Prop(serializedObject, "urpLighting", "URP 조명 받기", "켜면 씬의 메인 라이트(색·드리운 그림자)를 받는다(점·스폿 조명은 받지 않음). 센 빛에서도 텍스처보다 밝게 날리지 않고 색조만 물든다. 끄면 블렌더 대조 모드(빛 방향만, 밴드 색 고정).");
+            using (new EditorGUI.DisabledScope(!rig.urpLighting))
+            {
+                RigEditorUtil.Prop(serializedObject, "faceReceiveShadows", "얼굴이 받는 그림자", "0 = 얼굴은 명암선만(기본), 1 = 코·머리카락·주변 물체 그림자가 얼굴에 진다. 코 그림자가 번진 얼룩처럼 보일 수 있다.");
+                RigEditorUtil.Prop(serializedObject, "bodyReceiveShadows", "몸·머리카락이 받는 그림자", "1 = 나무·건물 그림자에 들어가면 같이 어두워진다(기본). 머리카락이 많으면 가닥끼리·앞머리가 눈에 드리운 그림자까지 생겨 복잡해질 수 있다.");
+            }
+
             RigEditorUtil.Header("그림자 색");
             RigEditorUtil.Prop(serializedObject, "skinShadow", "피부 그림자 색", "얼굴 재질에만, 텍스처에 곱하는 리니어 값. 기본 회보라.");
             RigEditorUtil.Prop(serializedObject, "bodyShadow", "몸 그림자 폭", "몸·옷의 명암 경계 위치. 클수록 그림자가 넓어진다.");
             RigEditorUtil.Prop(serializedObject, "bodyShadowColor", "몸 그림자 색", "몸·옷 재질에 곱하는 리니어 값.");
+
+            string modelPath = RigEditorUtil.ModelPathOf(rig.sourceModelGuid);
+            if (modelPath != null)
+            {
+                var s = RigEditorUtil.Settings(modelPath);
+
+                // 다시 변환하면 리그 값은 자동값으로 돌아간다. 슬라이더를 끌 때마다 저장하면 모델이 매번 다시 임포트되므로 버튼으로 따로 저장한다.
+                RigEditorUtil.Header("조정값 저장 (다시 변환해도 유지)");
+                bool same = s.toonRigSaved && JsonUtility.ToJson(s.toonRig) == JsonUtility.ToJson(ToonRigValues.From(rig));
+                EditorGUILayout.LabelField(!s.toonRigSaved ? "저장한 값 없음: 다시 변환하면 위 값이 자동값으로 돌아갑니다."
+                                         : same ? "저장한 값 있음: 다시 변환해도 지금 값이 들어갑니다."
+                                         : "저장한 값 있음 (지금 값과 다름): 다시 변환하면 저장한 값이 들어갑니다.", EditorStyles.wordWrappedMiniLabel);
+                using (new EditorGUILayout.HorizontalScope())
+                {
+                    if (GUILayout.Button(new GUIContent("지금 값을 저장", "위 항목(외곽선·명암선·림·조명·그림자 색, 고급 제외)을 모델 설정에 저장합니다. 다시 변환해도 자동값 대신 이 값이 들어갑니다.")))
+                    { s.toonRigSaved = true; s.toonRig = ToonRigValues.From(rig); RigEditorUtil.SaveSettings(modelPath, s); GUIUtility.ExitGUI(); }
+                    using (new EditorGUI.DisabledScope(!s.toonRigSaved))
+                        if (GUILayout.Button(new GUIContent("저장한 값 지우기", "다음 변환부터 자동값을 씁니다. 지금 인스펙터의 값은 바꾸지 않습니다.")))
+                        { s.toonRigSaved = false; RigEditorUtil.SaveSettings(modelPath, s); GUIUtility.ExitGUI(); }
+                }
+
+                // 자동 노멀을 블렌더에서 손으로 다듬어 가져오는 왕복 (FaceNormalRoundTrip). 메시는 유니티에 두고 얼굴 노멀만 OBJ 로 주고받는다.
+                RigEditorUtil.Header("블렌더에서 얼굴 노멀 다듬기 (OBJ 왕복)");
+                var edit = FaceNormalEdit.LoadFor(modelPath);
+                EditorGUILayout.LabelField(edit == null ? "다듬은 노멀 없음: 자동(방사형) 노멀을 씁니다."
+                                         : "다듬은 노멀 있음: 정점 " + edit.VertexTotal + "개. 다시 변환해도 이 노멀이 들어갑니다.", EditorStyles.wordWrappedMiniLabel);
+                using (new EditorGUILayout.HorizontalScope())
+                {
+                    if (GUILayout.Button(new GUIContent("블렌더로 보내기", "얼굴 영역을 OBJ 로 저장합니다. 블렌더에서 File > Import > Wavefront (.obj) 로 열어 노멀만 다듬고, File > Export > Wavefront (.obj) 로 내보내세요 (축·크기 기본값, 노멀 켬).")))
+                    {
+                        Directory.CreateDirectory(FaceNormalRoundTrip.DefaultFolder);
+                        string path = EditorUtility.SaveFilePanel("얼굴 노멀 OBJ 저장", FaceNormalRoundTrip.DefaultFolder, Path.GetFileNameWithoutExtension(modelPath) + "_face", "obj");
+                        if (!string.IsNullOrEmpty(path))
+                        {
+                            string done = FaceNormalRoundTrip.Export(rig, path);
+                            EditorUtility.DisplayDialog("FBX2NPR", done != null ? done + "\n\n블렌더에서 노멀만 다듬고 같은 설정으로 OBJ 를 내보낸 뒤 '다듬은 노멀 불러오기'를 누르세요. 정점을 더하거나 지우면 불러올 수 없습니다." : "내보낼 얼굴 메시가 없습니다.", "확인");
+                        }
+                        GUIUtility.ExitGUI();
+                    }
+                    if (GUILayout.Button(new GUIContent("다듬은 노멀 불러오기", "블렌더에서 내보낸 OBJ 의 노멀을 원본 모델 옆에 저장하고, 다시 변환해 이 인스턴스를 교체합니다.")))
+                    {
+                        string path = EditorUtility.OpenFilePanel("다듬은 얼굴 노멀 OBJ", FaceNormalRoundTrip.DefaultFolder, "obj");
+                        if (!string.IsNullOrEmpty(path))
+                        {
+                            var res = FaceNormalRoundTrip.Read(rig, path);
+                            string msg = string.Join("\n", res.lines.ToArray());
+                            if (res.error != null) EditorUtility.DisplayDialog("FBX2NPR", "불러오지 않았습니다: " + res.error + (msg.Length > 0 ? "\n\n" + msg : ""), "확인");
+                            else if (res.entries.Count == 0) EditorUtility.DisplayDialog("FBX2NPR", "바뀐 노멀이 없습니다.\n\n" + msg, "확인");
+                            else
+                            {
+                                FaceNormalRoundTrip.Save(modelPath, res.entries);
+                                EditorUtility.DisplayDialog("FBX2NPR", msg + "\n\n" + FaceNormalEdit.PathFor(modelPath) + " 에 저장했습니다. 다시 변환해 교체합니다.", "확인");
+                                RigEditorUtil.SwitchStyle(rig, modelPath, FBX2NPRStyle.SubcultureToon);
+                            }
+                        }
+                        GUIUtility.ExitGUI();
+                    }
+                    using (new EditorGUI.DisabledScope(edit == null))
+                        if (GUILayout.Button(new GUIContent("다듬은 노멀 지우기", "저장한 노멀을 지우고 다시 변환해 자동(방사형) 노멀로 돌아갑니다.")))
+                        {
+                            if (EditorUtility.DisplayDialog("FBX2NPR", "블렌더에서 다듬은 노멀(" + FaceNormalEdit.PathFor(modelPath) + ")을 지우고 다시 변환할까요?", "지우고 다시 변환", "취소"))
+                            { FaceNormalRoundTrip.Clear(modelPath); RigEditorUtil.SwitchStyle(rig, modelPath, FBX2NPRStyle.SubcultureToon); }
+                            GUIUtility.ExitGUI();
+                        }
+                }
+
+                RigEditorUtil.Header("텍스처에 굽는 값 (바꾸면 다시 변환)");
+                EditorGUI.BeginChangeCheck();
+                bool flat = EditorGUILayout.Toggle(new GUIContent("얼굴 피부 평탄화", "켜면 얼굴 피부를 한 색으로 정리하고 이목구비를 다시 그린다(만화 얼굴). 끄면 원래 피부 텍스처를 살리고 명암만 툰으로 넣는다(실사 피부). 이미 깔끔한 그림풍 텍스처는 끄는 편이 낫다(Emma)."), s.flattenFaceSkin);
+                if (EditorGUI.EndChangeCheck()) { s.flattenFaceSkin = flat; RigEditorUtil.SaveSettings(modelPath, s); }
+                if (GUILayout.Button("이 설정으로 다시 변환해 교체")) { RigEditorUtil.SwitchStyle(rig, modelPath, FBX2NPRStyle.SubcultureToon); GUIUtility.ExitGUI(); }
+            }
 
             EditorGUILayout.Space(6);
             advanced = EditorGUILayout.Foldout(advanced, "고급 (전체 항목)", true);

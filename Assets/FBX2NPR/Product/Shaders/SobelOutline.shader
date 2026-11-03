@@ -14,7 +14,8 @@ Shader "FBX2NPR/SobelOutline"
         _DepthScale ("깊이 민감도", Range(0,40)) = 12
         _NormalScale("노멀 민감도", Range(0,8)) = 2.2
         _Threshold  ("문턱값", Range(0,1)) = 0.12
-        // 0=정상, 1=엣지만, 2=씬 노멀, 3=깊이. 버퍼가 비었는지 눈으로 확인할 때 씁니다.
+        _FlatFaceJumpOnly ("실루엣만 얼굴 안은 깊이 끊김만 선으로 (0/1)", Float) = 1
+        // 0=정상, 1=엣지만, 2=씬 노멀, 3=깊이, 4=실루엣만 얼굴 안. 버퍼가 비었는지 눈으로 확인할 때 씁니다.
         _Debug      ("디버그 출력", Float) = 0
     }
 
@@ -35,7 +36,13 @@ Shader "FBX2NPR/SobelOutline"
             #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/DeclareDepthTexture.hlsl"
             #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/DeclareNormalsTexture.hlsl"
 
-            float _Darkness, _Thickness, _DepthScale, _NormalScale, _Threshold, _Debug;
+            float _Darkness, _Thickness, _DepthScale, _NormalScale, _Threshold, _Debug, _FlatFaceJumpOnly;
+
+            // 외곽선 피처가 얼굴 렌더러를 원본 노멀로 다시 그린 텍스처 (xyz 노멀, w 카메라까지 거리, 없는 곳은 0).
+            // 재질 셰이더가 노멀 버퍼에 정리된 노멀을 써도(UTS 등) 코·입 선이 살아 있게 합니다.
+            // 실루엣 선만 쓰는 얼굴의 안쪽(얼굴 가중치가 높은 곳)은 w 가 음수입니다 (LineNormals.shader).
+            TEXTURE2D_X(_FBX2NPRLineNormals);
+            float _LineNormalsOn;
 
             // 3x3 소벨 커널의 가로/세로 가중치
             static const float2 kOff[8] = {
@@ -50,28 +57,64 @@ Shader "FBX2NPR/SobelOutline"
                 return LinearEyeDepth(SampleSceneDepth(uv), _ZBufferParams);
             }
 
+            // 장면 노멀. 원본 노멀로 다시 그린 얼굴이 같은 깊이에 있으면 그 노멀을 씁니다 (앞에 다른 물체가 가리면 장면 노멀 그대로).
+            float3 Normals(float2 uv, float eyeDepth)
+            {
+                float3 n = SampleSceneNormals(uv);
+                if (_LineNormalsOn > 0.5)
+                {
+                    float4 ln = SAMPLE_TEXTURE2D_X(_FBX2NPRLineNormals, sampler_PointClamp, uv);
+                    if (ln.w != 0.0 && abs(abs(ln.w) - eyeDepth) < 1e-3 * eyeDepth + 1e-4) n = ln.xyz;
+                }
+                return n;
+            }
+
+            // 실루엣 선만 쓰는 얼굴이 이 자리에 보이는가 (외곽선 피처가 w 를 음수로 남긴 화소, 앞에 다른 물체가 가리면 아님).
+            bool FlatFace(float2 uv, float eyeDepth)
+            {
+                if (_LineNormalsOn < 0.5) return false;
+                float4 ln = SAMPLE_TEXTURE2D_X(_FBX2NPRLineNormals, sampler_PointClamp, uv);
+                return ln.w < 0.0 && abs(-ln.w - eyeDepth) < 1e-3 * eyeDepth + 1e-4;
+            }
+
             half4 frag (Varyings i) : SV_Target
             {
                 float2 uv = i.texcoord;
                 float2 texel = (1.0 / _ScreenParams.xy) * _Thickness;
 
                 float dC = EyeDepth(uv);
-                float3 nC = SampleSceneNormals(uv);
+                float3 nC = Normals(uv, dC);
+                bool flatAll = FlatFace(uv, dC);
 
                 float dgx = 0, dgy = 0;
                 float3 ngx = 0, ngy = 0;
+                float dN[8];
                 [unroll]
                 for (int k = 0; k < 8; k++)
                 {
                     float2 o = uv + kOff[k] * texel;
                     float d = EyeDepth(o);
-                    float3 n = SampleSceneNormals(o);
+                    float3 n = Normals(o, d);
+                    dN[k] = d;
                     dgx += d * kGx[k];  dgy += d * kGy[k];
                     ngx += n * kGx[k];  ngy += n * kGy[k];
+                    flatAll = flatAll && FlatFace(o, d);
                 }
 
+                float dGrad = sqrt(dgx*dgx + dgy*dgy);
+                // 실루엣 선만 쓰는 얼굴 안(3x3 이 모두 그 얼굴)에서는 깊이가 끊긴 만큼만 선으로 봅니다.
+                // 마주 보는 두 이웃과 중심의 2차 차분은 고르게 기운 면에서 0, 앞뒤로 떨어진 곳에서 끊긴 크기라서
+                // 코볼·입 옆처럼 비스듬히 돌아가는 면(흐린 겹선이 팔자주름처럼 잡혔다, Night Dress)은 빠지고 턱 아래 목처럼 떨어진 곳은 남습니다.
+                // 4배는 소벨과 눈금을 맞추는 값입니다 (끊김 J 에서 소벨 4J, 2차 차분 J).
+                // 처음엔 이 얼굴 안의 깊이 민감도를 0.25배로 낮췄는데, 목까지 얼굴 가중치가 높은 모델(CasualOutfit)에서 턱선이 흐려졌다 (2026-11-03).
+                if (flatAll && _FlatFaceJumpOnly > 0.5)
+                {
+                    float jump = max(max(abs(dN[3] + dN[4] - 2.0 * dC), abs(dN[1] + dN[6] - 2.0 * dC)),
+                                     max(abs(dN[0] + dN[7] - 2.0 * dC), abs(dN[2] + dN[5] - 2.0 * dC)));
+                    dGrad = min(dGrad, 4.0 * jump);
+                }
                 // 깊이는 거리에 비례해 커지므로 중심 깊이로 나눠 거리와 무관하게 만듭니다.
-                float dEdge = sqrt(dgx*dgx + dgy*dgy) / max(dC, 1e-4) * _DepthScale;
+                float dEdge = dGrad / max(dC, 1e-4) * _DepthScale;
                 float nEdge = sqrt(dot(ngx,ngx) + dot(ngy,ngy)) * _NormalScale;
 
                 float edge = max(dEdge, nEdge);
@@ -81,7 +124,8 @@ Shader "FBX2NPR/SobelOutline"
                 {
                     if (_Debug < 1.5) return half4(edge, edge, edge, 1);
                     if (_Debug < 2.5) return half4(nC * 0.5 + 0.5, 1);
-                    return half4(frac(dC.xxx * 0.5), 1);
+                    if (_Debug < 3.5) return half4(frac(dC.xxx * 0.5), 1);
+                    return flatAll ? half4(1, 0.5, 0, 1) : half4(edge, edge, edge, 1);
                 }
 
                 half4 col = SAMPLE_TEXTURE2D_X(_BlitTexture, sampler_LinearClamp, uv);
