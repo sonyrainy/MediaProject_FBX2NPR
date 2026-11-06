@@ -77,6 +77,62 @@ namespace FBX2NPR.Tests
             return new FaceLandmarks.Src { name = "Head", world = w.ToArray(), weights = weights, isFace = true, normals = n.ToArray(), triangles = tri.ToArray() };
         }
 
+        // 정중선 앞쪽 윤곽만 있는 얼굴: 코끝 z 0.10, 턱 끝 y -0.08 까지 앞을 보는 면, 그 아래 턱 밑면과 목. 메시는 턱 아래로 10cm 더 내려간다.
+        static FaceLandmarks.Src ProfileFace()
+        {
+            var w = new List<Vector3>(); var n = new List<Vector3>();
+            void Add(float x, float y, float z, Vector3 nor) { w.Add(new Vector3(x, y, z)); n.Add(nor.normalized); }
+            for (int i = 0; i < 40; i++)
+            {
+                float y = -0.002f * i;   // 코끝(0)부터 턱(-0.08)까지
+                float z = 0.10f - 0.15f * Mathf.Sqrt(-y * 0.1f);
+                foreach (float x in new[] { -0.006f, 0f, 0.006f }) Add(x, y, z, new Vector3(0f, i < 8 ? -0.5f : -0.2f, 1f));
+            }
+            for (int i = 0; i < 8; i++)   // 턱 밑면: 앞을 거의 보지 않고 아래를 본다
+                foreach (float x in new[] { -0.006f, 0f, 0.006f }) Add(x, -0.08f - 0.002f * i, 0.07f - 0.01f * i, new Vector3(0f, -1f, 0.2f));
+            for (int i = 0; i < 27; i++)   // 목: 뒤쪽에서 앞을 본다
+                foreach (float x in new[] { -0.03f, 0f, 0.03f }) Add(x, -0.10f - 0.003f * i, 0f, Vector3.forward);
+            // 코 높이 얼굴 폭 14cm
+            for (int i = 0; i < 8; i++) { Add(-0.07f, -0.002f * i, 0.02f, Vector3.forward); Add(0.07f, -0.002f * i, 0.02f, Vector3.forward); }
+            Add(0f, 0f, 0.10f, Vector3.forward);
+            Add(0f, 0.12f, -0.05f, Vector3.forward);   // 머리 위
+            var weights = new float[w.Count]; for (int i = 0; i < weights.Length; i++) weights[i] = 1f;
+            return new FaceLandmarks.Src { name = "Head", world = w.ToArray(), weights = weights, isFace = true, normals = n.ToArray() };
+        }
+
+        [Test]
+        public void ChinComesFromTheFrontProfileWhenEyesAreEstimated()
+        {
+            var m = FaceLandmarks.Detect(new List<FaceLandmarks.Src> { ProfileFace() });
+            Assert.That(m.eyesEstimated, Is.True);
+            Assert.That(m.chinFound, Is.True);
+            Assert.That(m.noseTip.y - m.chinTip.y, Is.EqualTo(0.08f).Within(0.008f), "턱 밑면이 시작되는 자리. 메시가 끝나는 목 아래가 아니다");
+        }
+
+        [Test]
+        public void EyesAreFoundFromMaterialSlotsWhenNoMeshIsNamedEye()
+        {
+            var face = Face();
+            var slot = new List<Vector3>();
+            for (int i = 0; i < 8; i++) { float t = i / 7f; slot.Add(new Vector3(0.02f + 0.02f * t, 0f, 0.06f)); slot.Add(new Vector3(-0.02f - 0.02f * t, 0f, 0.06f)); }
+            face.eyeSlot = slot.ToArray();
+            var r = FaceLandmarks.Detect(new List<FaceLandmarks.Src> { face });
+            Assert.That(r.eyesFound && !r.eyesEstimated, Is.True, "재질 칸으로 찾은 눈은 추정이 아니다");
+            Assert.That(r.noseTip, Is.EqualTo(Nose), "눈을 찾았으니 코끝은 눈 아래에서 찾는다");
+        }
+
+        [TestCase("eye_mt1", true)]
+        [TestCase("eyeHilight_mt1", true)]
+        [TestCase("目", true)]
+        [TestCase("白目", true)]
+        [TestCase("EyeBrow", false)]
+        [TestCase("まゆげ", false)]
+        [TestCase("face_mt1", false)]
+        public void EyeNames(string name, bool expected)
+        {
+            Assert.That(FaceLandmarks.IsEyeName(name), Is.EqualTo(expected));
+        }
+
         [Test]
         public void CrescentIsFittedEvenWhenTheNoseHasForm()
         {
@@ -89,6 +145,25 @@ namespace FBX2NPR.Tests
             m.FitNoseMoon(parts, light);
             Assert.That(m.moonOn, Is.True, "그래도 코 그림자는 원본 노멀 그림자 자리에 맞춘 도형으로 그린다");
             Assert.That(m.moonShape.z, Is.GreaterThan(0f));
+        }
+
+        [Test]
+        public void NoseRadialIsMeasuredFromTheSurfaceBesideTheNose()
+        {
+            var parts = new List<FaceLandmarks.Src> { NoseFace(), Eyes() };
+            var m = FaceLandmarks.Detect(parts);
+            var light = FBX2NPRConverter.DefaultLight();
+            m.CalibrateNoseStop(parts, light);
+            m.FitNoseMoon(parts, light);
+            float before = m.noseRadial;
+            var center = new Vector3(0f, m.noseTip.y, m.noseTip.z - 0.05f);
+            m.MeasureNoseRadial(parts, center);
+            Assert.That(m.noseRadial, Is.Not.EqualTo(before), "방사형 중심에서 잰 값으로 바뀐다");
+            Assert.That(m.noseRadial, Is.InRange(0.01f, 0.1f), "코끝이 아니라 코 옆 표면까지의 수평 거리");
+
+            var far = new FaceLandmarks();
+            far.MeasureNoseRadial(parts, center);
+            Assert.That(far.noseRadial, Is.EqualTo(0.06f), "코를 못 찾으면 기본값을 둔다");
         }
     }
 }

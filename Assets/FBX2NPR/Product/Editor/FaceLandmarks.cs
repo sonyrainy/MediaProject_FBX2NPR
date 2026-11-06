@@ -25,6 +25,16 @@ namespace FBX2NPR.EditorTools
             public bool isFace;
             public Vector3[] normals; // 월드 원본 노멀 (코 음영 면적 계산용, 없으면 그 메시는 건너뜀)
             public int[] triangles;
+            public Vector3[] eyeSlot; // 재질이나 텍스처 이름이 눈인 칸의 정점. 메시 이름으로 눈을 못 찾았을 때 쓴다
+        }
+
+        /// <summary>재질·텍스처 이름이 눈을 가리키는가 (눈썹 제외). 일본어 재질 이름도 본다 (프로나마: 目, 白目).</summary>
+        public static bool IsEyeName(string name)
+        {
+            if (string.IsNullOrEmpty(name)) return false;
+            var s = name.ToLowerInvariant();
+            if (s.Contains("brow") || s.Contains("blw") || s.Contains("眉") || s.Contains("まゆ")) return false;
+            return s.Contains("eye") || s.Contains("iris") || s.Contains("pupil") || s.Contains("瞳") || s.Contains("目");
         }
 
         public bool faceFound;
@@ -69,6 +79,18 @@ namespace FBX2NPR.EditorTools
                 foreach (var w in p.world) { if (w.x >= fc.x) a.Add(w); else b.Add(w); }
             }
             bool eyeMesh = a.Count >= 8 && b.Count >= 8;
+            if (!eyeMesh)
+            {
+                // 메시 이름에 눈이 없으면 재질 칸을 본다. 16명 중 10명이 메시 이름으로는 눈을 못 찾았고, 그중 2명은 얼굴 메시 안에 눈 재질 칸이 있었다.
+                a.Clear(); b.Clear(); names.Clear();
+                foreach (var p in parts)
+                {
+                    if (p.eyeSlot == null || p.eyeSlot.Length == 0) continue;
+                    names.Add(p.name + " 재질 칸");
+                    foreach (var w in p.eyeSlot) { if (w.x >= fc.x) a.Add(w); else b.Add(w); }
+                }
+                eyeMesh = a.Count >= 8 && b.Count >= 8;
+            }
             if (eyeMesh)
             {
                 // 최소·최대 대신 5~95 백분위로 잡는다. 유니티짱 눈 메시에는 동떨어진 정점이 섞여 있어
@@ -136,7 +158,9 @@ namespace FBX2NPR.EditorTools
             // 턱 끝: 정중선 근처, 코끝에서 얼굴 깊이 25% 이내로 앞쪽에 있는 정점 중 가장 낮은 점.
             // 목은 턱보다 한참 뒤에 있어서 깊이 조건으로 빠진다. 다만 The Boss 는 배가 앞으로 나와서 가슴을 턱으로 잡았다(코끝 24cm 아래).
             // 그래서 찾는 높이를 제한한다: 얼굴 삼등분 비율상 코끝~턱은 눈~코끝의 1.2~3배 (Ch07 2.2배, 유니티짱 1.6배).
-            if (r.noseFound)
+            // 눈을 비율로 추정한 모델은 이 범위를 믿을 수 없어 앞쪽 윤곽에서 찾는다 (ChinFromProfile).
+            if (r.noseFound && r.eyesEstimated) r.ChinFromProfile(parts);
+            if (r.noseFound && !r.chinFound)
             {
                 float dEN = (r.eyesFound ? 0.5f * (r.eyeA.y + r.eyeB.y) : r.noseTip.y + 0.15f * fs.y) - r.noseTip.y;
                 if (dEN < 0.02f * fs.y) dEN = 0.15f * fs.y;
@@ -157,6 +181,79 @@ namespace FBX2NPR.EditorTools
                 }
             }
             return r;
+        }
+
+        // 턱 찾기 값. 코 높이 얼굴 폭(wn)의 배수라 모델 크기와 메시에 몸이 섞였는지에 상관없다.
+        public const float ChinBinFrac = 0.04f, ChinStripFrac = 0.12f, ChinFrontFrac = 0.05f;
+        public const float ChinStartFrac = 0.22f;     // 코 밑면(아래를 보는 면)을 턱으로 잡지 않게 이만큼 내려가서 찾기 시작한다
+        public const float ChinFacingDown = -0.75f;   // 앞쪽 면 노멀의 위 성분이 이보다 작으면 턱 밑면이다
+        public const float ChinJumpFrac = 0.15f;      // 앞쪽 윤곽이 한 칸에 이만큼 뒤로 뛰면 입속처럼 안쪽 면이라 턱이 아니다 (The Boss)
+
+        /// <summary>
+        /// 턱 끝을 앞쪽 윤곽에서 찾는다: 정중선 띠의 가장 앞쪽 면을 코 밑에서부터 내려가며, 면이 아래를 보기 시작하는 첫 자리. 그런 자리가 없으면 메시가 끝나는 자리.
+        /// 눈~코끝 거리나 얼굴 메시 바운드에 기대지 않는다. 얼굴 메시에 몸이 섞이면 바운드가 커져 턱이 가슴으로 갔다(Futuristic 코끝 아래 23cm).
+        /// 눈을 메시로 찾아 턱이 믿을 만한 5명(유니티짱, Galaxia, NightDress, Emma, Ch07)과 견주면 차이가 2.5mm 이내다.
+        /// 몸과 옷이 한 메시인 모델(MeshyMan, MeshyWoman)은 턱 밑면이 옷깃과 이어져 있어 맞지 않는다. README 입력 조건 밖이다.
+        /// </summary>
+        void ChinFromProfile(List<Src> parts)
+        {
+            var xs = new List<float>();
+            float band = 0.06f * face.size.y, wn = 0f;
+            for (int it = 0; it < 3; it++)
+            {
+                xs.Clear();
+                foreach (var p in parts)
+                {
+                    if (!p.isFace || p.weights == null || p.normals == null) continue;
+                    for (int i = 0; i < p.world.Length; i++)
+                        if (p.weights[i] >= 0.5f && p.normals[i].z > -0.2f && Mathf.Abs(p.world[i].y - noseTip.y) < band) xs.Add(p.world[i].x);
+                }
+                if (xs.Count < 4) { band *= 2f; continue; }
+                xs.Sort();
+                wn = xs[(int)(xs.Count * 0.98f)] - xs[(int)(xs.Count * 0.02f)];
+                band = 0.08f * wn;
+            }
+            if (wn <= 0f) return;
+            float h = ChinBinFrac * wn;
+            int nb = Mathf.CeilToInt(1.4f / ChinBinFrac), last = -1;
+            float prevZ = noseTip.z;
+            for (int b = 0; b < nb; b++)
+            {
+                float y0 = noseTip.y - (b + 1) * h, y1 = noseTip.y - b * h, zMax = float.NegativeInfinity;
+                foreach (var p in parts)
+                {
+                    if (!p.isFace || p.weights == null || p.normals == null) continue;
+                    for (int i = 0; i < p.world.Length; i++)
+                    {
+                        var w = p.world[i];
+                        if (p.weights[i] >= 0.5f && w.y >= y0 && w.y < y1 && Mathf.Abs(w.x - noseTip.x) < ChinStripFrac * wn && w.z > zMax) zMax = w.z;
+                    }
+                }
+                if (float.IsNegativeInfinity(zMax)) continue;
+                float ny = 0f; int n = 0;
+                foreach (var p in parts)
+                {
+                    if (!p.isFace || p.weights == null || p.normals == null) continue;
+                    for (int i = 0; i < p.world.Length; i++)
+                    {
+                        var w = p.world[i];
+                        if (p.weights[i] >= 0.5f && w.y >= y0 && w.y < y1 && Mathf.Abs(w.x - noseTip.x) < ChinStripFrac * wn && w.z > zMax - ChinFrontFrac * wn) { ny += p.normals[i].y; n++; }
+                    }
+                }
+                ny /= Mathf.Max(n, 1);
+                last = b;
+                bool jumped = prevZ - zMax > ChinJumpFrac * wn;
+                if (!jumped) prevZ = zMax;
+                if ((b + 0.5f) * h > ChinStartFrac * wn && ny < ChinFacingDown && !jumped)
+                {
+                    chinTip = new Vector3(noseTip.x, noseTip.y - (b + 0.5f) * h, zMax); chinFound = true;
+                    return;
+                }
+            }
+            if (last >= 0 && (last + 1) * h > ChinStartFrac * wn)
+            {
+                chinTip = new Vector3(noseTip.x, noseTip.y - (last + 1) * h, prevZ); chinFound = true;
+            }
         }
 
         // 50번 기준점: 눈꼬리 살짝 바깥, 턱 끝 조금 옆 턱선. 둘 다 얼굴 표면 위의 점. A = +X 쪽, B = -X 쪽.
@@ -555,6 +652,28 @@ namespace FBX2NPR.EditorTools
             moved = vCenter < LineStopDefault + liftCenter;
             if (!moved) return LineStopDefault;
             return Mathf.Clamp(vCorner - liftCorner - softness, LineStopMin, LineStopDefault);
+        }
+
+        public float noseRadial = 0.06f;   // 코 옆 표면에서 방사형 노멀 중심까지 수평 거리 (m)
+
+        /// <summary>
+        /// 셰이더가 명암선을 코 쪽으로 휠 때 수평 ndotl 차이를 미터로 옮기는 값을 잰다.
+        /// 방사형 중심은 얼굴 정점 평균이라 코끝에서 3~12cm 로 모델마다 크게 다르고, 코끝은 표면보다 튀어나와 있어 코 도형 바깥 표면에서 잰다.
+        /// </summary>
+        public void MeasureNoseRadial(List<Src> parts, Vector3 radialCenter)
+        {
+            if (!noseFound || !moonOn) return;
+            float d = Mathf.Abs(moonShape.x) + moonShape.z, sum = 0f;
+            int n = 0;
+            foreach (float s in new[] { -1f, 1f })
+            {
+                bool ok;
+                Vector3 p = FrontSurface(parts, new Vector2(noseTip.x + s * d, noseTip.y + moonShape.y), out ok);
+                if (!ok) continue;
+                sum += new Vector2(p.x - radialCenter.x, p.z - radialCenter.z).magnitude;
+                n++;
+            }
+            if (n > 0) noseRadial = sum / n;
         }
 
         // 셰이더(ToonBand HorizNdotL)와 같은 식: 방향의 수평 성분과 수평 빛의 내적, 수평 길이는 0.35 이상으로

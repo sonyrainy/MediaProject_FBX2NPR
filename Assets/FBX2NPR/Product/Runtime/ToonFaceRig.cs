@@ -80,6 +80,8 @@ namespace FBX2NPR
         public Vector4 moonShape = new Vector4(0.0008f, -0.0012f, 0.0059f, 0.0052f);
         [Tooltip("x 기준 빛의 옆 성분(이때 두께가 위 값 그대로), y 코끝 뒤로 얼마까지 그리는지 (미터)")]
         public Vector4 moonParam = new Vector4(0.57f, 0.02f, 0f, 0f);
+        [Tooltip("코 옆 표면에서 방사형 노멀 중심까지 수평 거리 (미터). 변환 도구가 잰다. 명암선을 코 쪽으로 휠 때 쓴다.")]
+        public float noseRadial = 0.06f;
 
         [Header("눈 피하기 (명암선이 눈을 가르지 않고 바깥으로 돌아 나간다)")]
         public bool avoidEyes = false;
@@ -460,7 +462,7 @@ namespace FBX2NPR
             s.F(Id.NoseMoon, (noseShadow && noseHalfMoon && noseTip != null) ? 1f : 0f);
             s.V(Id.NoseMoonShape, (noseFigure == NoseFigure.Crescent ? StretchedMoonShape() : moonShape) * k);
             s.V(Id.NoseMoonParam, new Vector4(moonParam.x, moonParam.y * k, moonThickness, (float)(int)noseFigure));
-            s.V(Id.NoseMoonExtra, new Vector4(moonBulge, 0f, 0f, 0f));
+            s.V(Id.NoseMoonExtra, new Vector4(moonBulge, noseRadial * k, 0f, 0f));
             if (noseFigure == NoseFigure.Teardrop)
             {
                 Vector4 da, dr;
@@ -582,7 +584,7 @@ namespace FBX2NPR
                 Gizmos.DrawLine(top, bottomIn); Gizmos.DrawLine(bottomIn, bottomOut); Gizmos.DrawLine(bottomOut, top);
                 return;
             }
-            float thick = Mathf.Clamp01(moonThickness * fL);
+            float thick = moonThickness * Mathf.Min(fL, 1f);   // 셰이더와 같은 식 (명암선이 다가올 때 얇아지는 NoseWane 은 그리지 않는다)
             if (thick < 1e-3f) return;
             var ms = StretchedMoonShape();   // 길이 배율 적용
             Vector3 cm = noseTip.position + right * (sgn * ms.x) + up * ms.y;

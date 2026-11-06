@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
@@ -236,7 +236,7 @@ namespace FBX2NPR.EditorTools
                         if (!bInit) { rep.body = new Bounds(wv[i], Vector3.zero); bInit = true; } else rep.body.Encapsulate(wv[i]);
                         if (p.boundsW[i] > 0f) { if (!hInit) { rep.head = new Bounds(wv[i], Vector3.zero); hInit = true; } else rep.head.Encapsulate(wv[i]); }
                     }
-                    srcs.Add(new FaceLandmarks.Src { name = p.name, world = wv, weights = p.weights, isFace = p.isFace, normals = wn, triangles = p.mesh.triangles });
+                    srcs.Add(new FaceLandmarks.Src { name = p.name, world = wv, weights = p.weights, isFace = p.isFace, normals = wn, triangles = p.mesh.triangles, eyeSlot = EyeSlotVertices(p, wv) });
                 }
                 var marks = FaceLandmarks.Detect(srcs);
                 rep.faceFound = marks.faceFound && hInit;
@@ -246,6 +246,9 @@ namespace FBX2NPR.EditorTools
                     marks.CalibrateNoseStop(srcs, DefaultLight());
                     marks.FitNoseMoon(srcs, DefaultLight(), MoonThicknessDefault, 0, false, 1f, MoonBulgeDefault, 1f, DropRadiusDefault, DropHeightDefault);
                     marks.CalibrateLineStop(srcs, centerW, DefaultLight(), ChinTiltDefault, ChinBendDefault, LineSoftnessDefault);
+                    marks.MeasureNoseRadial(srcs, centerW);
+                    int faded = FadeFaceWeightBelowNeck(parts, srcs, marks);
+                    if (faded > 0) rep.lines.Add("얼굴 메시에 몸이 섞임: 턱 아래 정점 " + faded + "개의 얼굴 가중치를 줄여 일반 명암으로 넘김");
                     rep.lines.Add("얼굴 기준점: " + marks.Describe());
                     rep.lines.Add(marks.noseStopNote + " / " + marks.moonNote);
                     rep.lines.Add(marks.lineStopNote);
@@ -296,9 +299,9 @@ namespace FBX2NPR.EditorTools
                 bool haveFill = false; var faceFill = new Color32(0, 0, 0, 255);
                 float ipd = marks.eyesFound ? (marks.eyeA - marks.eyeB).magnitude : 0.34f * marks.face.size.x;
                 int baked = 0, alreadyFlat = 0, bodyBaked = 0;
-                if (!crit.flattenFaceSkin) rep.lines.Add("텍스처 평탄화: 모델 설정에서 꺼져 있어 건너뜀 (flattenFaceSkin = false)");
-                else if (rep.faceFound && !marks.noseFound) rep.lines.Add("텍스처 평탄화: 코를 찾지 못해 건너뜀 (피부 표본을 코 주변에서 뜬다)");
-                if (rep.faceFound && marks.noseFound && crit.flattenFaceSkin)
+                if (!crit.flattenFaceSkin) rep.lines.Add("텍스처 평탄화: 꺼짐. 텍스처는 그대로 쓰고 얼굴이 이미 평평한지만 잰다 (사진 텍스처는 모델 설정 flattenFaceSkin 을 켠다)");
+                if (rep.faceFound && !marks.noseFound) rep.lines.Add("텍스처 평탄화: 코를 찾지 못해 건너뜀 (피부 표본을 코 주변에서 뜬다)");
+                if (rep.faceFound && marks.noseFound)
                 {
                     var seen = new HashSet<Texture>();     // 얼굴 평탄화를 시도한 텍스처
                     var done = new HashSet<Texture>();     // 평탄화본이 정해진 텍스처 (몸 단계에서 다시 하지 않는다)
@@ -328,7 +331,7 @@ namespace FBX2NPR.EditorTools
                             else labelSkip = string.Format(CultureInfo.InvariantCulture, "라벨 안 씀(파서가 눈 {0:F2}%·눈썹 {1:F2}% 로 못 찾음, 기준 {2:F1}%·{3:F1}%) — 예전 방식(머리 본 가중치 + 색 통계). ",
                                                            100f * eyes / tr.observed, 100f * brows / tr.observed, 100f * ParserEyeMinFrac, 100f * ParserBrowMinFrac);
                         }
-                        var r = SkinFlatBake.Bake(p.albedo, fsrc, marks, new SkinFlatCore.Opt(), false, lab);
+                        var r = SkinFlatBake.Bake(p.albedo, fsrc, marks, new SkinFlatCore.Opt { measureOnly = !crit.flattenFaceSkin }, false, lab);
                         if (lab != null) r.note = r.labelNote + (labelSkip ?? "") + r.note; else if (labelSkip != null) r.note = labelSkip + r.note;
                         if (r.drawn != null)
                         {
@@ -506,7 +509,7 @@ namespace FBX2NPR.EditorTools
                     rig.noseHalfMoon = marks.moonOn;
                     if (marks.moonOn)
                     {
-                        rig.moonShape = marks.moonShape; rig.moonParam = marks.moonParam; rig.moonThickness = marks.moonParam.z;
+                        rig.moonShape = marks.moonShape; rig.moonParam = marks.moonParam; rig.moonThickness = marks.moonParam.z; rig.noseRadial = marks.noseRadial;
                         rig.noseFigure = (ToonFaceRig.NoseFigure)Mathf.RoundToInt(marks.moonParam.w);
                         rig.quadA = marks.quadA; rig.quadB = marks.quadB; rig.quadRound = FaceLandmarks.QuadRound;
                         rig.moonStretch = MoonStretchDefault; rig.moonBulge = marks.moonExtra.x; rig.moonWidth = MoonWidthDefault;
@@ -568,6 +571,13 @@ namespace FBX2NPR.EditorTools
                 }
                 foreach (var ap in removed) AssetDatabase.DeleteAsset(ap);
                 if (removed.Count > 0) rep.lines.Add("예전 실행의 쓰지 않는 에셋 " + removed.Count + "개 정리: " + string.Join(", ", removed.ConvertAll(x => Path.GetFileName(x)).ToArray()));
+
+                // 재질을 새로 만들었으니 구워 둔 얼굴 SDF 맵을 다시 넣는다. 맵은 구울 때의 리그 값을 담고 있다.
+                if (crit.toonFaceSdf && Directory.Exists(FaceSdfBake.MaskRoot(prefabPath)))
+                {
+                    FaceSdfBake.Apply(prefabPath, new FaceSdfBake.Report());
+                    rep.lines.Add("얼굴 SDF 맵을 다시 넣어 켬: 재질 " + FaceSdfBake.SetUse(prefabPath, true) + "개 (리그 값을 바꿨다면 다시 구울 것)");
+                }
             }
             finally { UnityEngine.Object.DestroyImmediate(inst); }
             return rep;
@@ -914,10 +924,13 @@ namespace FBX2NPR.EditorTools
                 // 덮어쓴 메시는 GPU 쪽 정점 배치가 예전 그대로 남는다. 배치가 바뀌면(표정을 켜고 다시 가져와 정점 수·스트림이 달라진 유니티짱 얼굴)
                 // SkinnedMeshRenderer 가 "does not match the expected mesh data size and vertex stride" 로 그리기를 멈춘다 (MeshRenderer 는 그린다).
                 // 디스크에 저장하고 다시 불러오면 새 배치로 만들어진다.
+                // 배치가 같아도 읽기 전용 메시는 GPU 쪽 값이 그대로라, 에디터를 다시 켜기 전에는 바뀐 노멀·UV 가 화면에 안 나왔다 (2026-11-05 Futuristic).
+                // 메모리에서 내려야 디스크의 새 값으로 다시 올라간다.
                 if (old is Mesh)
                 {
                     AssetDatabase.SaveAssetIfDirty(old);
                     AssetDatabase.ImportAsset(path, ImportAssetOptions.ForceUpdate);
+                    Resources.UnloadAsset(old);
                     old = AssetDatabase.LoadAssetAtPath<T>(path);
                 }
                 return old;
@@ -933,6 +946,65 @@ namespace FBX2NPR.EditorTools
             if (asset == null) return;
             var labels = new List<string>(AssetDatabase.GetLabels(asset));
             if (!labels.Contains(GeneratedLabel)) { labels.Add(GeneratedLabel); AssetDatabase.SetLabels(asset, labels.ToArray()); }
+        }
+
+        // 턱 끝 아래로 코끝~턱 길이의 몇 배부터 얼굴 처리를 거두고(목 위쪽까지는 얼굴) 몇 배에서 끝내는가.
+        // 정점의 1% 넘게 BodyInFaceDrop 배 아래까지 내려가면 얼굴 메시에 몸이 섞인 것으로 본다. 목까지만 있는 얼굴 메시는 건드리지 않는다.
+        const float NeckFadeStart = 0.5f, NeckFadeEnd = 1f, BodyInFaceDrop = 1.5f;
+
+        /// <summary>
+        /// 얼굴 메시에 몸이 섞인 모델은 턱 아래에서 얼굴 처리를 거둔다: 얼굴 가중치(UV2.x)를 줄이고 노멀을 원본으로 되돌린다.
+        /// 명암선 규칙은 턱 아래를 통째로 그늘로 칠하고, 방사형 노멀도 머리 중심에서 뻗어 가슴에서는 아래를 본다.
+        /// 그래서 머리 메시가 가슴까지 가는 모델(Futuristic)은 턱을 제대로 찾으면 가슴이 어두워졌다.
+        /// 바뀐 정점 수를 돌려준다. 머리 본에 묶인 정점이 턱 아래 멀리까지 없는 모델은 아무것도 바뀌지 않는다.
+        /// </summary>
+        static int FadeFaceWeightBelowNeck(List<Part> parts, List<FaceLandmarks.Src> srcs, FaceLandmarks marks)
+        {
+            if (!marks.noseFound || !marks.chinFound) return 0;
+            float drop = marks.ChinDrop(), y0 = marks.chinTip.y - NeckFadeStart * drop, y1 = marks.chinTip.y - NeckFadeEnd * drop, yBody = marks.chinTip.y - BodyInFaceDrop * drop;
+            int changed = 0;
+            for (int k = 0; k < parts.Count; k++)
+            {
+                var p = parts[k]; if (!p.FaceRend) continue;
+                var fw = new List<Vector2>(); p.mesh.GetUVs(2, fw);
+                var w = srcs[k].world; if (fw.Count != w.Length) continue;
+                int face = 0, below = 0;
+                for (int i = 0; i < w.Length; i++) if (fw[i].x > 0f) { face++; if (w[i].y < yBody) below++; }
+                if (below <= 0.01f * face) continue;
+                var nrm = p.mesh.normals;
+                int here = 0;
+                for (int i = 0; i < w.Length; i++)
+                {
+                    if (fw[i].x <= 0f || w[i].y >= y0) continue;
+                    float keep = Mathf.SmoothStep(0f, 1f, Mathf.InverseLerp(y1, y0, w[i].y));
+                    fw[i] = new Vector2(fw[i].x * keep, fw[i].y);
+                    nrm[i] = Vector3.Lerp(p.origN[i], nrm[i], keep).normalized;
+                    here++;
+                }
+                if (here == 0) continue;
+                p.mesh.SetUVs(2, fw); p.mesh.normals = nrm; p.mesh.RecalculateTangents();
+                OriginalNormals.Write(p.mesh, p.origN);   // 노멀·탄젠트가 바뀌었으니 탄젠트 공간 원본 노멀도 다시 굽는다
+                changed += here;
+            }
+            return changed;
+        }
+
+        /// <summary>재질이나 텍스처 이름이 눈인 칸의 정점 (월드). 얼굴 메시 안에 눈이 재질 칸으로 들어 있는 모델(미라이코마치, 프로나마)용. 없으면 null.</summary>
+        static Vector3[] EyeSlotVertices(Part p, Vector3[] world)
+        {
+            if (p.srcMats == null || p.slotAlbedo == null) return null;
+            var seen = new HashSet<int>();
+            int sub = Mathf.Min(p.mesh.subMeshCount, p.srcMats.Length);
+            for (int mi = 0; mi < sub; mi++)
+            {
+                var m = p.srcMats[mi]; var t = p.slotAlbedo[mi];
+                if (!FaceLandmarks.IsEyeName(m != null ? m.name : null) && !FaceLandmarks.IsEyeName(t != null ? t.name : null)) continue;
+                foreach (var i in p.mesh.GetTriangles(mi)) seen.Add(i);
+            }
+            if (seen.Count == 0) return null;
+            var w = new Vector3[seen.Count]; int k = 0;
+            foreach (var i in seen) w[k++] = world[i];
+            return w;
         }
 
         /// <summary>

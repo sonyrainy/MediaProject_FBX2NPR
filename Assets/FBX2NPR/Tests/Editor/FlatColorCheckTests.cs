@@ -10,6 +10,13 @@ namespace FBX2NPR.Tests
     /// </summary>
     public class FlatColorCheckTests
     {
+        [Test]
+        public void FlatteningStaysOffUnlessAsked()
+        {
+            // 텍스처를 고치는 단계라 기본은 끔. 그림풍 텍스처(Tanya, Emma)에서 켜면 그려 둔 눈이 지워졌다.
+            Assert.That(new FBX2NPRAssetSettings().flattenFaceSkin, Is.False);
+        }
+
         [TestCase("Ch07", 189, 143, 121, 170f, 125f, 98f, false)]
         [TestCase("TheBoss", 200, 122, 90, 175f, 109f, 82f, false)]
         [TestCase("Emma", 206, 151, 132, 192f, 134f, 113f, false)]

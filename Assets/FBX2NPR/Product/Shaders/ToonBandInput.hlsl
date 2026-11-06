@@ -82,6 +82,8 @@ CBUFFER_START(UnityPerMaterial)
     // 외곽선용 노멀(DepthNormals 패스, LineNormal.hlsl)
     float  _OutlineFlatNormal;
     float4 _InnerLineFade;
+    // 얼굴 SDF 맵이 덮는 UV 사각형 (xy 시작, zw 크기). 얼굴이 텍스처 일부만 쓰는 모델도 맵 해상도를 얼굴에 다 쓴다
+    float4 _FaceSdfRect;
 CBUFFER_END
 
 #endif

@@ -97,10 +97,11 @@ namespace FBX2NPR
         public string ignoreMeshContains = "";
 
         /// <summary>
-        /// 변환 도구가 얼굴 텍스처에서 구운 빛을 빼고 피부를 평평하게 구울지. 기본은 켬.
-        /// 피부가 한 색이 아닌 캐릭터(비늘·무늬가 특징인 Jones 같은 경우)는 무늬가 사라지므로 끕니다.
+        /// 변환 도구가 얼굴 텍스처에서 구운 빛을 빼고 피부를 평평하게 구울지. 기본은 끔: 사용자의 텍스처를 고치지 않는다.
+        /// 모공과 구운 빛이 있는 사진 텍스처(Ch07, The Boss)에만 켠다. 그림풍 텍스처에서 켜면 그려 둔 눈이 지워지고 홍조가 사라졌다(Tanya, Emma).
+        /// 이 판단을 자동으로 하는 기준은 텍스처 몇 장으로 맞춘 값이라, 켜야 돌게 했다. 꺼져 있어도 얼굴이 이미 평평한지는 잰다(외곽선 방식을 정하는 값).
         /// </summary>
-        public bool flattenFaceSkin = true;
+        public bool flattenFaceSkin = false;
 
         /// <summary>
         /// 변환 도구는 칠할 평탄색이 원래 얼굴 평균색과 색이 많이 다르면 '피부가 한 색이 아니다'로 보고 평탄화를 건너뜁니다.
@@ -196,6 +197,12 @@ namespace FBX2NPR
         /// 툰 리그 인스펙터에서 '지금 값을 저장'한 조정값. 켜져 있으면 다시 변환해도 자동값(명암선 자동 보정·기본값·toonNoseLineFade) 대신 이 값을 넣는다.
         /// 예전에는 다시 변환하면 코 둘레 선과 평탄화 말고는 인스펙터에서 바꾼 값이 모두 기본값으로 돌아갔다 (2026-10-31).
         /// </summary>
+        /// <summary>
+        /// 얼굴 명암을 구워 둔 SDF 맵에서 읽을지 (FaceSdfBake). 다시 변환해도 새 재질에 맵을 다시 넣어 켠다.
+        /// 맵은 구울 때의 리그 값을 담고 있으므로, 명암선 위치 같은 값을 바꿨다면 다시 구워야 한다.
+        /// </summary>
+        public bool toonFaceSdf = false;
+
         public bool toonRigSaved = false;
         public ToonRigValues toonRig = new ToonRigValues();
 

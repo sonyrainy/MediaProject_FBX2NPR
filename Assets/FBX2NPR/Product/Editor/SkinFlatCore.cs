@@ -47,6 +47,7 @@ namespace FBX2NPR
             public float gate = 0.45f;              // 피부 잔무늬(gateFine)가 이보다 작으면 이미 평평하게 칠한 텍스처로 보고 건너뜀
             public float gateRadiusFrac = 0.05f;    // 참고값(gateFineScaled)을 재는 반경 = max(1, gateRadiusFrac * hwTex) 텍셀. 판정은 반경 1 로 잰 값으로 함
             public bool force;                      // 게이트 무시
+            public bool measureOnly;                // 잔무늬만 재고 멈춘다. 평탄화를 끈 모델도 얼굴이 이미 평평한지 알아야 외곽선 방식을 정할 수 있다
             // 칠할 색을 밖에서 정해 줍니다(판정 기준은 그대로 이 영역의 중앙색). 목·손을 얼굴과 같은 평탄색으로 칠할 때 씁니다.
             public bool useFill; public byte fillR, fillG, fillB;
             // 라벨 경로용(텍셀별, 호출하는 쪽이 자른 크기에 맞춰 넣음): 국소 대비로 '남길' 수 있는 텍셀만 true. null 이면 전부 허용(예전 동작).
@@ -267,6 +268,7 @@ namespace FBX2NPR
                         if (!o.force) { res.skipped = true; res.note += "이미 평평함"; return res; }
                         res.note += "문턱 미달이지만 강제 적용. ";
                     }
+                    if (o.measureOnly) { res.skipped = true; res.note += "평탄화를 켜지 않아 텍스처를 그대로 씀"; return res; }
 
                     for (int i = 0; i < N; i++)
                     {

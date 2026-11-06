@@ -1,4 +1,4 @@
-﻿// Blender 노드 구성과 1:1로 맞춘 툰 밴드 셰이더 + 탄젠트 공간 노멀 맵.
+// Blender 노드 구성과 1:1로 맞춘 툰 밴드 셰이더 + 탄젠트 공간 노멀 맵.
 //
 // 조명을 유니티 라이팅에서 받지 않고 _LightDir 로 직접 넘깁니다.
 // 이 프로젝트 라이트는 색온도 5000K 에 강도 2 이고 URP 에셋에 톤매핑 볼륨이 물려 있어서,
@@ -68,7 +68,7 @@ Shader "NormalTest/ToonBand"
         _NoseMoon      ("코 반달 켜기 (평평한 코)", Range(0,1)) = 0
         _NoseMoonShape ("반달: x 코 중심선에서 곧은 변까지, y 중심 높이(코끝 기준), z 폭, w 반높이 (미터)", Vector) = (0.001, 0.005, 0.005, 0.008)
         _NoseMoonParam ("코 도형: x 기준 빛의 옆 성분, y 깊이 한계 (미터), z 초승달 두께 (0 없음 ~ 1 반달), w 모양 (0 초승달, 1 세모, 2 둥근 사다리꼴, 3 물방울)", Vector) = (0.57, 0.02, 0.5, 0)
-        _NoseMoonExtra ("초승달: x 가장 두꺼운 곳 위치 (-0.9 아래 ~ 0.9 위, 0 가운데)", Vector) = (0, 0, 0, 0)
+        _NoseMoonExtra ("초승달: x 가장 두꺼운 곳 위치 (-0.9 아래 ~ 0.9 위, 0 가운데), y 코 옆 표면에서 방사형 노멀 중심까지 수평 거리 (미터)", Vector) = (0, 0.06, 0, 0)
         // 둥근 사다리꼴 (57번): 원래 원본 노멀 그림자의 윤곽을 사각형으로 줄이고 모서리를 둥글게. 꼭짓점은 반지름만큼 안쪽으로 줄여 둔 값.
         _NosePolyA     ("둥근 사다리꼴 꼭짓점 0·1 (그림자 쪽 가로, 세로: 코끝 기준 m)", Vector) = (0, 0, 0, 0)
         _NosePolyB     ("둥근 사다리꼴 꼭짓점 2·3", Vector) = (0, 0, 0, 0)
@@ -119,6 +119,10 @@ Shader "NormalTest/ToonBand"
         _ShadowReceive ("받는 그림자 세기 (몸)", Range(0,1)) = 1
         // 얼굴은 기본으로 받지 않는다: 코가 볼에 드리운 그림자가 그림자 맵 해상도대로 번진 얼룩처럼 보였다 (Ch07).
         _FaceShadowReceive ("받는 그림자 세기 (얼굴, 얼굴 가중치만큼)", Range(0,1)) = 0
+        // 얼굴 SDF 맵 (FaceSdfBake 가 굽는다). 켜면 얼굴 명암을 규칙 대신 이 맵에서 읽는다.
+        [Toggle(_FACE_SDF)] _UseFaceSdf ("얼굴 명암을 SDF 맵에서 읽기", Float) = 0
+        [NoScaleOffset] _FaceSDF ("얼굴 SDF 맵", 2D) = "white" {}
+        _FaceSdfRect ("SDF 맵이 덮는 UV 사각형 (xy 시작, zw 크기)", Vector) = (0, 0, 1, 1)
     }
 
     SubShader
@@ -142,6 +146,7 @@ Shader "NormalTest/ToonBand"
             // 점·스폿 조명은 안 받지만 이 키워드는 둔다: 포워드+ 에서 이것 없이 컴파일하면 GetMainLight 가 세기를
             // unity_LightData 에서 읽는데, 포워드+ 는 그 값을 채우지 않아 메인 라이트가 0 이 되고 URP 조명 모드가 검게 나왔다.
             #pragma multi_compile _ _CLUSTER_LIGHT_LOOP
+            #pragma shader_feature_local_fragment _ _FACE_SDF
             #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
             #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Lighting.hlsl"
 
@@ -157,6 +162,8 @@ Shader "NormalTest/ToonBand"
             SAMPLER(sampler_EmissionMap);
 
             #include "ToonBandInput.hlsl"   // 재질 값 (네 패스가 같은 UnityPerMaterial 을 써야 SRP Batcher 를 탄다)
+            #include "ToonFaceRule.hlsl"
+            #include "FaceSDF.hlsl"
 
             struct Attributes
             {
@@ -179,64 +186,6 @@ Shader "NormalTest/ToonBand"
                 float3 origWS     : TEXCOORD4;
                 float  faceW      : TEXCOORD5;
             };
-
-            // 수평 ndotl: 위 방향 성분을 빼고 방향만 비교한다.
-            // 수평 성분이 짧은 노멀(턱 밑·정수리)은 정규화가 불안정하므로 0 쪽으로 줄인다 (그 부위는 그림자 쪽으로 간다).
-            // 사각형까지의 부호 있는 거리 (안쪽이 음수). 변까지 거리의 최소값 + 교차 횟수로 안팎을 가린다 (Inigo Quilez 의 sdPolygon).
-            // 물방울 거리 (안쪽이 음수): 반지름 ra 인 원(pa)과 rb 인 원(pb)을 접선으로 이은 모양 (Inigo Quilez 의 sdUnevenCapsule).
-            // rb 를 작게 두면 pb 쪽이 뾰족한 물방울이 된다.
-            float SdDrop(float2 p, float2 pa, float2 pb, float ra, float rb)
-            {
-                p -= pa; pb -= pa;
-                float h = max(dot(pb, pb), 1e-12);
-                float2 q = float2(dot(p, float2(pb.y, -pb.x)), dot(p, pb)) / h;
-                q.x = abs(q.x);
-                float b = ra - rb;
-                float2 c = float2(sqrt(max(h - b * b, 1e-12)), b);
-                float k = c.x * q.y - c.y * q.x;
-                float m = dot(c, q), n = dot(q, q);
-                if (k < 0.0) return sqrt(h * n) - ra;
-                if (k > c.x) return sqrt(h * (n + 1.0 - 2.0 * q.y)) - rb;
-                return m - ra;
-            }
-
-            float SdQuad(float2 p, float2 v0, float2 v1, float2 v2, float2 v3)
-            {
-                float2 v[4] = { v0, v1, v2, v3 };
-                float d = dot(p - v[0], p - v[0]);
-                float s = 1.0;
-                [unroll] for (int k = 0; k < 4; k++)
-                {
-                    float2 vi = v[k], vj = v[(k + 3) % 4];
-                    float2 e = vj - vi, w = p - vi;
-                    float2 b = w - e * saturate(dot(w, e) / max(dot(e, e), 1e-12));
-                    d = min(d, dot(b, b));
-                    bool c0 = p.y >= vi.y, c1 = p.y < vj.y, c2 = e.x * w.y > e.y * w.x;
-                    if ((c0 && c1 && c2) || (!c0 && !c1 && !c2)) s = -s;
-                }
-                return s * sqrt(d);
-            }
-
-            float HorizNdotL(float3 nrm, float3 lhN, float3 up)
-            {
-                float3 h = nrm - up * dot(nrm, up);
-                return dot(h, lhN) / max(length(h), 0.35);
-            }
-
-            // 눈 타원 마스크 (얼굴 좌우·위 평면에서 잰 타원, 눈보다 한참 뒤쪽은 제외). 가장자리는 부드럽게 줄어든다.
-            // 빛 쪽으로는 타원을 끝까지 늘인다. 타원 그대로 쓰면 그림자 안에 눈만 밝은 섬이 생겼다.
-            // 늘이면 밝은 쪽과 눈 사이가 이어져, 명암선이 한 줄로 눈 바깥을 돌아 나간다 (레퍼런스의 모양).
-            float EyeMask(float3 p, float3 c, float3 right, float3 up, float3 fwd, float lightSide)
-            {
-                float3 rel = p - c;
-                float rx = dot(rel, right);
-                float ex = (rx * lightSide > 0.0) ? 0.0 : rx / max(_EyeRadius.x, 1e-5);
-                float ey = dot(rel, up) / max(_EyeRadius.y, 1e-5);
-                float front = step(-_EyeRadius.z, dot(rel, fwd));
-                // 안쪽 0.25 까지는 꽉 차고 바깥으로 천천히 준다. 0.45 에서 시작하면 효과가 가장자리에서 한꺼번에 빠져
-                // 튀어나온 부분의 위아래가 수평으로 꺾였다(Ch07). 천천히 빠지면 선이 곡선으로 돌아 나온다.
-                return (1.0 - smoothstep(0.25, 1.0, sqrt(ex * ex + ey * ey))) * front;
-            }
 
             // URP 조명 모드: 빛 색의 색조는 두고 가장 밝은 채널만 _LightMaxLimit 까지 누른다.
             // 센 빛(이 프로젝트 라이트는 강도 2)에서도 밴드 색이 텍스처보다 밝게 날리지 않는다 (툰 셰이더들의 관례).
@@ -347,163 +296,14 @@ Shader "NormalTest/ToonBand"
                     if (lhl > 1e-4)
                     {
                         float3 lhN = lh / lhl;
-                        // 눈 피하기: 눈 타원 안에서는 임계값을 낮춰 밝게 둔다. 마스크가 부드럽게 줄어드니
-                        // 명암선이 타원 가장자리를 따라 눈 바깥으로 휘어 돌고, 눈 위아래에서 원래 선으로 이어진다.
-                        float stopC = _CurveStop;
-                        // 지수함수 꼴 명암선: 턱 끝(t=0)에서 임계값을 가장 크게 올려 선을 턱 끝까지 끌어오고,
-                        // 위로 갈수록 exp(-t) 로 빠르게 사라져 옆면에서는 세로 한 줄로 돌아간다. 턱 끝 아래(목)는 계속 어둡다.
-                        if (_CurveTilt > 0.0001)
-                        {
-                            float hC = dot(i.positionWS - _NoseTip.xyz, up) + _ChinScale;           // 턱 끝 기준 높이 (m)
-                            // 지수는 8 에서 자른다: 몸통처럼 턱보다 한참 아래 정점에서 exp 가 무한대가 되면 smoothstep 이 NaN 을 낸다.
-                            stopC += _CurveTilt * exp(min(-hC / max(_ChinScale * _ChinBend, 1e-4), 8.0));
-                        }
-                        if (_EyeAvoid > 0.0001 || _NoseDebug > 0.5)
-                        {
-                            float3 fwdE   = normalize(_FaceForward.xyz);
-                            float3 rightE = normalize(cross(up, fwdE));
-                            float  sideL  = sign(dot(lhN, rightE));   // 빛이 얼굴 오른쪽(+1)에서 오나 왼쪽(-1)에서 오나
-                            float  mE     = max(EyeMask(i.positionWS, _EyeA.xyz, rightE, up, fwdE, sideL), EyeMask(i.positionWS, _EyeB.xyz, rightE, up, fwdE, sideL));
-                            // 1.5 로 크게 낮추면 가장자리 조금만 걸쳐도 끝까지 밝아져 경계가 타원 모양 그대로 각이 졌다.
-                            // 0.9 로 두면 선이 원래 자리와 타원 사이를 매끄럽게 이어 간다.
-                            stopC -= mE * _EyeAvoid * 0.9;
-                            eyeDbg = mE;
-                        }
-                        // 50번 기준점 명암선: 노멀이 아니라 얼굴 위의 위치로 선을 긋는다 (위의 위치·당김·눈 피하기를 모두 대신한다).
-                        // 처음에는 기준점에서 잰 노멀 임계값으로 그었는데, 유니티짱은 방사형 노멀 중심이 얼굴 표면 바로 뒤에 있어
-                        // 노멀이 옆으로 크게 퍼지는 바람에 얼굴 그림자가 통째로 사라졌다. 위치로 그으면 모든 캐릭터에서
-                        // 눈꼬리·턱선 기준점을 정확히 지난다 (서브컬처 게임이 얼굴 그림자를 그림으로 지정하는 것과 같은 원리).
-                        float litA = -1.0;
-                        if (_AnchorOn > 0.5)
-                        {
-                            float3 fwdA   = normalize(_FaceForward.xyz);
-                            float3 rightA = normalize(cross(up, fwdA));
-                            float  sideA  = (dot(lhN, rightA) >= 0.0) ? -1.0 : 1.0;          // 그림자 쪽 = 빛 반대. +1 이면 +X 쪽
-                            float3 Cp     = (sideA > 0.0) ? _AnchorCA.xyz : _AnchorCB.xyz;   // 눈꼬리 살짝 바깥
-                            float3 Jp     = (sideA > 0.0) ? _AnchorJA.xyz : _AnchorJB.xyz;   // 턱 끝 조금 옆 턱선
-                            // 얼굴 평면 좌표: u = 그림자 쪽으로 얼마나 바깥인가, v = 높이
-                            float uC = dot(Cp - _RadialCenter.xyz, rightA) * sideA;
-                            float uJ = dot(Jp - _RadialCenter.xyz, rightA) * sideA;
-                            float uP = dot(i.positionWS - _RadialCenter.xyz, rightA) * sideA;
-                            float vC = dot(Cp, up), vJ = dot(Jp, up), vP = dot(i.positionWS, up);
-                            float uB;
-                            if (vP >= vC)
-                            {
-                                // 눈꼬리 위: 끊기지 않고 거의 세로로 위까지 이어진다 (살짝 바깥으로).
-                                // 한때 여기서 선을 닫았더니(그 위는 밝게) 눈꼬리 높이에서 그림자가 수평으로 뚝 잘렸다.
-                                uB = uC + (vP - vC) * _AnchorTopSlope;
-                            }
-                            else
-                            {
-                                // 눈꼬리 아래: 볼을 타고 내려가다 턱 가까이에서 지수 꼴로 휘어 턱선 점을 지난다.
-                                // 정규화해서 눈꼬리 높이에서 정확히 uC, 턱선 점 높이에서 정확히 uJ.
-                                float lam = max((vC - vJ) * _ChinBend, 1e-4);
-                                float eC  = exp(-(vC - vJ) / lam);
-                                float eP  = exp(min((vJ - vP) / lam, 8.0));
-                                uB = uC + (uJ - uC) * (eP - eC) / max(1.0 - eC, 1e-4);
-                            }
-                            // 빛을 따라 움직이는 모드: 빛이 옆으로 갈수록 그림자가 커져 선이 안쪽으로, 정면 쪽이면 바깥으로 간다.
-                            // 기준 빛일 때 이동량이 0 이라 선이 기준점을 지난다. 고정 모드는 늘 기준점을 지난다(좌우만 바뀜).
-                            if (_AnchorFix < 0.5)
-                            {
-                                float3 ld  = normalize(_AnchorLight.xyz);
-                                float3 ldh = ld - up * dot(ld, up);
-                                ldh /= max(length(ldh), 1e-4);
-                                uB -= (abs(dot(lhN, rightA)) - abs(dot(ldh, rightA))) * _AnchorGain;
-                            }
-                            litA = smoothstep(-_AnchorSoft, _AnchorSoft, uB - uP);   // 선보다 빛 쪽이면 밝음
-                            anchorDbg = step(min(length(i.positionWS - Cp), length(i.positionWS - Jp)), 0.003);
-                        }
-                        lit = (litA >= 0.0) ? litA : smoothstep(stopC - _CurveSoft, stopC + _CurveSoft, HorizNdotL(n, lhN, up));
-                        // 54번 코 반달 → 55번 초승달: 코가 평평한 캐릭터(유니티짱)는 원본 노멀 그림자가 큰 메시 면을 따라 꺾여 사다리꼴이 됐다.
-                        // 그 자리·크기를 임포트 때 재 두고(FaceLandmarks.FitNoseMoon), 얼굴 평면에 초승달을 그린다.
-                        // 구(球)에 옆빛이 들 때의 그림자처럼 바깥 호(윤곽)와 안쪽 호(명암 경계)가 위아래 끝에서 만난다.
-                        // 54번은 안쪽이 곧은 변인 반달이었는데 "너무 딱 반달이라 어색"했다.
-                        // 빛 반대쪽에 그리고, 빛이 반대편에서 오면 거울처럼 넘어간다. 바깥 호는 고정이고
-                        // 안쪽 호만 빛을 따라 움직인다: 두께 ∝ (1 - 빛의 정면 성분) — 구의 명암 경계와 같은 비율.
-                        // 기준 빛에서 두께 = _NoseMoonParam.z, 빛이 정면이면 사라지고 옆으로 갈수록 반달(두께 1)까지 두꺼워진다.
-                        if (_NoseMoon > 0.5)
-                        {
-                            float3 fwdM   = normalize(_FaceForward.xyz);
-                            float3 rightM = normalize(cross(up, fwdM));
-                            float3 relM   = i.positionWS - _NoseTip.xyz;
-                            float  sideM  = dot(lhN, rightM);                       // 빛이 +right 쪽에서 오면 양수
-                            float  sgnM   = (sideM >= 0.0) ? -1.0 : 1.0;            // 그림자 쪽 부호
-                            float  cosR   = sqrt(saturate(1.0 - _NoseMoonParam.x * _NoseMoonParam.x));   // 기준 빛의 정면 성분
-                            float  fL     = (1.0 - dot(lhN, fwdM)) / max(1.0 - cosR, 1e-3);   // 기준 빛에서 1, 정면 빛 0, 옆으로 갈수록 커짐
-                            float  aM     = max(_NoseMoonShape.z, 1e-5);             // 가로 폭 (초승달은 바깥 호의 가로 반지름)
-                            float  bM     = max(_NoseMoonShape.w, 1e-5);             // 세로 반높이
-                            float  uM     = dot(relM, rightM) * sgnM - _NoseMoonShape.x;   // 콧선 쪽 기준선에서 그림자 쪽으로 (m)
-                            float  vM     = dot(relM, up) - _NoseMoonShape.y;
-                            float  dM;
-                            if (_NoseMoonParam.w > 2.5)
-                            {
-                                // 61번 물방울: 사용자 레퍼런스(애니 일러스트)의 코 오른쪽 그림자. 위는 뾰족(콧대 쪽), 아래는 둥글고 통통(코끝 옆),
-                                // 왼쪽 변은 콧대 선에 붙는다. _NosePolyA = (아래 원 중심, 위 끝 원 중심), _NosePolyParam = (아래 반지름, 위 반지름, 콧대 선 위치).
-                                // 콧대 선 쪽은 두고 빛이 옆으로 갈수록 뺨 쪽으로 넓어진다(최대 1.5배).
-                                float2 pD = float2(dot(relM, rightM) * sgnM, dot(relM, up));
-                                float  sD = clamp(fL, 1e-3, 1.5);
-                                pD.x = _NosePolyParam.z + (pD.x - _NosePolyParam.z) / sD;
-                                dM = -SdDrop(pD, _NosePolyA.xy, _NosePolyA.zw, _NosePolyParam.x, _NosePolyParam.y);
-                            }
-                            else if (_NoseMoonParam.w > 1.5)
-                            {
-                                // 57번 둥근 사다리꼴: 사용자가 결국 원래 원본 노멀 그림자(53번)의 사다리꼴 느낌이 가장 자연스럽다고 했다.
-                                // 그 윤곽을 사각형으로 줄이고 꼭짓점을 반지름만큼 둥글게 (꼭짓점은 CPU 에서 미리 안쪽으로 줄여 변 자리를 지킨다).
-                                // 바깥 끝은 두고, 빛이 옆으로 갈수록 콧선 쪽으로 넓어진다(원본 노멀 그림자가 커지는 방향, 최대 1.5배).
-                                float2 pQ = float2(dot(relM, rightM) * sgnM, dot(relM, up));
-                                float  sQ = clamp(fL, 1e-3, 1.5);
-                                pQ.x = _NosePolyParam.y - (_NosePolyParam.y - pQ.x) / sQ;
-                                dM = -(SdQuad(pQ, _NosePolyA.xy, _NosePolyA.zw, _NosePolyB.xy, _NosePolyB.zw) - _NosePolyParam.x);
-                            }
-                            else if (_NoseMoonParam.w > 0.5)
-                            {
-                                // 56번 세모: 콧선 쪽 세로 변 + 코끝 높이의 밑변 + 빗변, 꼭짓점은 위(콧대 쪽). 애니메이션 코 옆 그림자의 흔한 모양.
-                                // 밑변 폭만 빛을 따라 변한다(초승달 두께와 같은 비율, 최대 1.5배).
-                                float wT   = aM * min(fL, 1.5);
-                                float dHyp = (wT * (bM - vM) - 2.0 * bM * uM) / sqrt(wT * wT + 4.0 * bM * bM);   // 빗변 안쪽이 양수 (거리)
-                                dM = min(min(uM, vM + bM), dHyp);
-                            }
-                            else
-                            {
-                                float thick = saturate(_NoseMoonParam.z * fL);
-                                float qv    = clamp(vM / bM, -1.0, 1.0);
-                                // 59번: 가장 두꺼운 곳을 sB 로 옮긴다(끝점 ±1 은 그대로). 음수면 코끝 쪽이 두껍고 콧대 쪽으로 가늘게 빠진다.
-                                float sB    = clamp(_NoseMoonExtra.x, -0.9, 0.9);
-                                float qw    = (qv - sB) / (1.0 - sB * qv);
-                                float prof  = sqrt(saturate(1.0 - qw * qw));          // 높이별 호의 가로 비율 (끝에서 0)
-                                float dOut  = aM * prof - uM;                         // 바깥 호 안쪽이 양수
-                                float dIn   = uM - aM * (1.0 - thick) * prof;         // 안쪽 호 바깥이 양수
-                                // 위아래 끝 밖은 확실히 바깥으로: 없으면 끝점을 잇는 세로선 위아래로 반투명 실선이 남을 수 있다
-                                dM = (thick > 1e-3) ? min(min(dOut, dIn), bM - abs(vM)) : -1.0;
-                            }
-                            float  eM     = max(fwidth(dM) * 0.75, 1e-6);              // 경계 1~2 픽셀 (53번과 같은 이유)
-                            float  shM    = smoothstep(-eM, eM, dM) * step(-_NoseMoonParam.y, dot(relM, fwdM)) * step(1e-3, fL);
-                            lit = min(lit, 1.0 - shM * _NoseShade);
-                            noseDbg = shM;
-                        }
-                        // 코: 코끝 주변 타원 안에서만 원본 노멀로 그림자를 넣는다. 같은 임계값 방식이라 모양이 단순하다.
-                        else if (_NoseShade > 0.0001 || _NoseDebug > 0.5)
-                        {
-                            float3 fwd   = normalize(_FaceForward.xyz);
-                            float3 right = normalize(cross(up, fwd));
-                            float3 rel   = i.positionWS - _NoseTip.xyz;
-                            float  ry    = dot(rel, up);
-                            float  nx    = dot(rel, right) / max(_NoseRadius.x, 1e-5);
-                            float  ny    = ry / max(ry > 0.0 ? _NoseRadius.y : _NoseRadius.z, 1e-5);
-                            float  front = step(-_NoseRadius.w, dot(rel, fwd));
-                            float  mN    = (1.0 - smoothstep(0.55, 1.0, sqrt(nx * nx + ny * ny))) * front;
-                            float  sN    = HorizNdotL(normalize(i.origWS), lhN, up);
-                            // 영역 가장자리에서 그림자를 흐리게 하면 뿌옇게 번진다. 대신 임계값을 낮춰 그림자 자체가
-                            // 가늘어지다 사라지게 한다: 경계는 끝까지 선명하고 끝이 뾰족해진다 (mN=0 이면 임계값 -1.7 로 그림자 없음).
-                            float  stopN = _NoseStop - (1.0 - mN) * 2.0;
-                            // 52번: 경계 폭을 화면에서 1~2 픽셀 이상으로 둔다. 유니티짱처럼 작은 코는 한 픽셀 사이에 sN 이 크게 바뀌어
-                            // 고정 폭(_CurveSoft)으로는 경계가 픽셀보다 얇아져 계단이 졌다.
-                            float  eN    = max(_CurveSoft, fwidth(sN - stopN) * 0.75);
-                            float  shN   = 1.0 - smoothstep(stopN - eN, stopN + eN, sN);
-                            lit = min(lit, 1.0 - shN * _NoseShade);
-                            noseDbg = mN;
-                        }
+                        // 얼굴 명암: 규칙으로 계산하거나(ToonFaceRule.hlsl), 구워 둔 SDF 맵을 읽는다(FaceSDF.hlsl). 재질의 _FACE_SDF 키워드가 고른다.
+                    #if defined(_FACE_SDF)
+                        FaceShade face = EvalFaceSdf(i.uv, lhN, up);
+                    #else
+                        FaceShade face = EvalFaceRule(i.positionWS, n, i.origWS, lhN, up);
+                    #endif
+                        lit = min(face.lit, 1.0 - face.noseShade * _NoseShade);
+                        noseDbg = face.noseDbg; eyeDbg = face.eyeDbg; anchorDbg = face.anchorDbg;
                     }
                     if (urp) lit = min(lit, shFace);
                     float3 cFace = lerp(_Band1.rgb, _Band2.rgb, lit);

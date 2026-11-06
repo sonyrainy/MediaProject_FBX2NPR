@@ -206,9 +206,43 @@ namespace FBX2NPR.EditorTools
                         }
                 }
 
+                // 규칙을 SDF 맵 초안으로 굽는다. 디자이너가 각도별 마스크를 고쳐 다시 합칠 수 있고, 맵을 읽는 다른 셰이더로 옮길 수 있다 (FaceSdfBake).
+                RigEditorUtil.Header("얼굴 SDF 초안");
+                string prefab = PrefabUtility.GetPrefabAssetPathOfNearestInstanceRoot(rig);
+                if (string.IsNullOrEmpty(prefab)) EditorGUILayout.HelpBox("씬에 놓은 프리팹 인스턴스에서 쓸 수 있습니다.", MessageType.None);
+                else
+                {
+                    string masks = FaceSdfBake.MaskRoot(prefab);
+                    bool baked = Directory.Exists(masks);
+                    EditorGUILayout.LabelField(baked ? "마스크 있음: 고친 뒤 '다시 합치기'를 누르면 맵에 반영됩니다. 위 명암선 값을 바꿨다면 다시 구워야 합니다."
+                                                     : "마스크 없음: 지금 규칙을 빛 각도별 마스크와 SDF 맵으로 굽습니다.", EditorStyles.wordWrappedMiniLabel);
+                    using (new EditorGUILayout.HorizontalScope())
+                    {
+                        if (GUILayout.Button(new GUIContent(baked ? "다시 굽기" : "굽기", "지금 규칙을 빛의 좌우 각도 5도마다 얼굴 UV 에 그려 마스크로 저장하고, SDF 맵으로 합칩니다.")))
+                        {
+                            if (!baked || EditorUtility.DisplayDialog("FBX2NPR", "고친 마스크가 있으면 지금 규칙으로 덮어씁니다. 다시 구울까요?", "다시 굽기", "취소"))
+                                EditorUtility.DisplayDialog("FBX2NPR", string.Join("\n", FaceSdfBake.Bake(prefab).lines.ToArray()), "확인");
+                            GUIUtility.ExitGUI();
+                        }
+                        using (new EditorGUI.DisabledScope(!baked))
+                        {
+                            if (GUILayout.Button(new GUIContent("다시 합치기", "폴더의 마스크를 맵 한 장으로 다시 합칩니다. 마스크를 고친 뒤 누릅니다.")))
+                            { EditorUtility.DisplayDialog("FBX2NPR", string.Join("\n", FaceSdfBake.Recombine(prefab).lines.ToArray()), "확인"); GUIUtility.ExitGUI(); }
+                            if (GUILayout.Button(new GUIContent("마스크 폴더 열기", "main_r_035.png 는 빛이 오른쪽 35도에서 올 때의 큰 명암선, nose_ 는 코 그림자입니다. 흰색이 밝은 곳입니다. 한 칸은 각도가 커지는 쪽으로 한 번만 어두워진다고 보므로, 그늘을 넓히려면 그 각도부터 뒤쪽 마스크를 함께 고칩니다.")))
+                            { EditorUtility.RevealInFinder(masks); GUIUtility.ExitGUI(); }
+                        }
+                    }
+                    using (new EditorGUI.DisabledScope(!baked))
+                    {
+                        EditorGUI.BeginChangeCheck();
+                        bool useSdf = EditorGUILayout.Toggle(new GUIContent("얼굴을 SDF 맵으로 칠하기", "켜면 얼굴 명암을 규칙 대신 맵에서 읽습니다. 끄면 규칙으로 돌아갑니다. 다시 변환해도 유지됩니다."), s.toonFaceSdf);
+                        if (EditorGUI.EndChangeCheck()) { s.toonFaceSdf = useSdf; RigEditorUtil.SaveSettings(modelPath, s); FaceSdfBake.SetUse(prefab, useSdf); SceneView.RepaintAll(); }
+                    }
+                }
+
                 RigEditorUtil.Header("텍스처에 굽는 값 (바꾸면 다시 변환)");
                 EditorGUI.BeginChangeCheck();
-                bool flat = EditorGUILayout.Toggle(new GUIContent("얼굴 피부 평탄화", "켜면 얼굴 피부를 한 색으로 정리하고 이목구비를 다시 그린다(만화 얼굴). 끄면 원래 피부 텍스처를 살리고 명암만 툰으로 넣는다(실사 피부). 이미 깔끔한 그림풍 텍스처는 끄는 편이 낫다(Emma)."), s.flattenFaceSkin);
+                bool flat = EditorGUILayout.Toggle(new GUIContent("얼굴 피부 평탄화", "켜면 얼굴 피부를 한 색으로 정리하고 이목구비를 다시 그린다(만화 얼굴). 사진 텍스처용이라 기본은 꺼져 있다. 끄면 원래 텍스처를 그대로 쓰고 명암만 툰으로 넣는다. 그림풍 텍스처에서 켜면 그려 둔 눈이 지워질 수 있다(Tanya)."), s.flattenFaceSkin);
                 if (EditorGUI.EndChangeCheck()) { s.flattenFaceSkin = flat; RigEditorUtil.SaveSettings(modelPath, s); }
                 if (GUILayout.Button("이 설정으로 다시 변환해 교체")) { RigEditorUtil.SwitchStyle(rig, modelPath, FBX2NPRStyle.SubcultureToon); GUIUtility.ExitGUI(); }
             }
