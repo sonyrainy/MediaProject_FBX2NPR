@@ -614,14 +614,13 @@ namespace FBX2NPR.EditorTools
         /// '눈 피하기'(타원 안만 밝힘)도 시험했지만 눈썹 바깥과 앞볼이 그늘로 남아 선이 눈 둘레에서 꺾였다. 선을 통째로 옮기면 한 줄로 내려간다.
         /// radialCenter: 얼굴 방사형 노멀의 중심(월드). 얼굴 가중치 1 인 표면의 노멀은 그 중심에서 나가는 방향이다.
         /// </summary>
-        public void CalibrateLineStop(List<Src> parts, Vector3 radialCenter, Vector3 lightDir, float chinTilt, float chinBend, float lineSoftness)
+        public void CalibrateLineStop(List<Src> parts, Vector3 radialCenter, Vector3 lightDir, float lineSoftness)
         {
             lineStop = LineStopDefault;
             if (!faceFound || !noseFound || !eyesFound) { lineStopNote = "명암선 위치: 기본값 (눈·코끝 없음)"; return; }
             if (eyesEstimated) { lineStopNote = "명암선 위치: 기본값 (눈을 비율로 추정해서 옮기지 않음)"; return; }
             float lx = Mathf.Abs(lightDir.x), lz = lightDir.z;
             if (lx * lx + lz * lz < 1e-8f) { lineStopNote = "명암선 위치: 기본값 (빛이 수직)"; return; }
-            float chin = ChinDrop();
             var sb = new System.Text.StringBuilder();
             for (int side = 0; side < 2; side++)
             {
@@ -635,7 +634,7 @@ namespace FBX2NPR.EditorTools
                 if (!okC || !okK) continue;
                 float vC = HorizLit(pc - radialCenter, lh), vK = HorizLit(pk - radialCenter, lh);
                 bool moved;
-                float s = LineStopFor(vC, ChinLift(pc.y, chin, chinTilt, chinBend), vK, ChinLift(pk.y, chin, chinTilt, chinBend), lineSoftness, out moved);
+                float s = LineStopFor(vC, 0f, vK, 0f, lineSoftness, out moved);   // 턱 쪽 곡선은 코끝 아래에서만 작동해 눈 높이의 문턱은 위치 그대로다
                 lineStop = Mathf.Min(lineStop, s);
                 sb.AppendFormat(CultureInfo.InvariantCulture, "{0}눈 {1} 한가운데 {2:F2}{3}, 눈꼬리 바깥 {4:F2}", sb.Length > 0 ? " / " : "", b ? "B" : "A", vC, moved ? " (그늘)" : "", vK);
             }
@@ -683,12 +682,6 @@ namespace FBX2NPR.EditorTools
             return Vector3.Dot(h, lightH) / Mathf.Max(h.magnitude, 0.35f);
         }
 
-        // 셰이더의 턱 보정: 턱 끝에 가까울수록 문턱을 올려 선을 턱으로 모은다 (눈 높이에서는 0.01~0.02)
-        float ChinLift(float y, float chin, float chinTilt, float chinBend)
-        {
-            float hC = (y - noseTip.y) + chin;
-            return chinTilt * Mathf.Exp(Mathf.Min(-hC / Mathf.Max(chin * chinBend, 1e-4f), 8f));
-        }
 
         /// <summary>축별 5~95 백분위 구간의 중심과 반폭.</summary>
         static void Robust(List<Vector3> pts, out Vector3 center, out Vector3 half)

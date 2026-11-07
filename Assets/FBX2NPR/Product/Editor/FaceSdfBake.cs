@@ -190,9 +190,13 @@ namespace FBX2NPR.EditorTools
             AssetDatabase.SaveAssets();
         }
 
-        /// <summary>얼굴 명암을 맵에서 읽을지 정한다. 맵이 있는 재질만 바꾸고, 바꾼 재질 수를 돌려준다. 끄면 규칙으로 돌아간다.</summary>
+        /// <summary>
+        /// 얼굴 명암을 맵에서 읽을지 정한다. 맵이 있는 재질만 바꾸고, 바꾼 재질 수를 돌려준다. 끄면 규칙으로 돌아간다.
+        /// 켤 때는 맵을 다시 넣는다. 다시 변환하면 재질이 새로 만들어져 맵 연결이 끊기는데, 그대로 두면 켜도 아무 일도 일어나지 않았다.
+        /// </summary>
         public static int SetUse(string prefabPath, bool on)
         {
+            if (on) Apply(prefabPath, new Report());
             int n = 0;
             ForEachFaceMaterial(prefabPath, (m, texName) =>
             {

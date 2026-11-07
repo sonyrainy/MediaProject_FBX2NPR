@@ -46,7 +46,7 @@ FaceShade EvalFaceSdf(float2 uv, float3 lhN, float3 up)
         float eW   = max(fwidth(born) * 0.75, 1e-3);
         s.noseShade *= smoothstep(-eW, eW, wane - born);
     }
-    s.noseShade *= saturate(wane * NOSE_WANE_FADE);
+    s.noseShade *= NoseFade(dot(lhN, fwd));
     s.noseDbg = 0.0; s.eyeDbg = 0.0; s.anchorDbg = 0.0;
     return s;
 }

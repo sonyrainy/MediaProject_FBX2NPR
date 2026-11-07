@@ -123,6 +123,7 @@ Shader "NormalTest/ToonBand"
         [Toggle(_FACE_SDF)] _UseFaceSdf ("얼굴 명암을 SDF 맵에서 읽기", Float) = 0
         [NoScaleOffset] _FaceSDF ("얼굴 SDF 맵", 2D) = "white" {}
         _FaceSdfRect ("SDF 맵이 덮는 UV 사각형 (xy 시작, zw 크기)", Vector) = (0, 0, 1, 1)
+        _KeepLit ("명암 없이 밝게 (눈 메시)", Float) = 0
     }
 
     SubShader
@@ -280,6 +281,8 @@ Shader "NormalTest/ToonBand"
                     shFace = smoothstep(0.35, 0.65, lerp(1.0, shadowAtten, _FaceShadowReceive));
                     c = lerp((ndotl >= _Stop1) ? _Band1.rgb : _Band0.rgb, c, shBody);
                 }
+                // 눈 메시는 자기 노멀로 명암을 받으면 피부에 그림자가 없는데 눈 위로만 띠가 지나가거나 눈이 세로로 갈라졌다.
+                if (_KeepLit > 0.5) c = _Band2.rgb;
 
                 // 서브컬처 얼굴 명암선 (46번). 45번(_OrigBlend)은 원본 노멀의 밝기를 기준으로 두 노멀을 섞어서,
                 // 원본 노멀의 요철이 그대로 경계선에 옮겨 붙었다(입꼬리의 홈). 경계는 정리된 노멀 하나로만 정한다.

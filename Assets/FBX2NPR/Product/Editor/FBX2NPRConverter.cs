@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
@@ -245,7 +245,7 @@ namespace FBX2NPR.EditorTools
                 {
                     marks.CalibrateNoseStop(srcs, DefaultLight());
                     marks.FitNoseMoon(srcs, DefaultLight(), MoonThicknessDefault, 0, false, 1f, MoonBulgeDefault, 1f, DropRadiusDefault, DropHeightDefault);
-                    marks.CalibrateLineStop(srcs, centerW, DefaultLight(), ChinTiltDefault, ChinBendDefault, LineSoftnessDefault);
+                    marks.CalibrateLineStop(srcs, centerW, DefaultLight(), LineSoftnessDefault);
                     marks.MeasureNoseRadial(srcs, centerW);
                     int faded = FadeFaceWeightBelowNeck(parts, srcs, marks);
                     if (faded > 0) rep.lines.Add("얼굴 메시에 몸이 섞임: 턱 아래 정점 " + faded + "개의 얼굴 가중치를 줄여 일반 명암으로 넘김");
@@ -453,6 +453,7 @@ namespace FBX2NPR.EditorTools
                             if (tex != null && flatOf.TryGetValue(tex, out flat) && (face || (src != null && bodyChanged.Contains(src)))) tex = flat;
                             m = new Material(shader);
                             SetupMat(m, face, tex, rep.handPainted, rep.head.center, src, matNotes);
+                            if (!face && (FaceLandmarks.IsEyeName(p.name) || FaceLandmarks.IsEyeName(src != null ? src.name : null))) m.SetFloat("_KeepLit", 1f);   // 눈은 얼굴 명암선을 따르지 않고 자기 명암 띠도 쓰지 않는다
                             string matPath = UniquePath(dir + "/Materials/" + Safe(src != null ? src.name : "none") + (face ? "_face" : ""), ".mat", used);
                             m = SaveOrReplace(m, matPath);
                             matOf[key] = m; matN++;
@@ -575,7 +576,6 @@ namespace FBX2NPR.EditorTools
                 // 재질을 새로 만들었으니 구워 둔 얼굴 SDF 맵을 다시 넣는다. 맵은 구울 때의 리그 값을 담고 있다.
                 if (crit.toonFaceSdf && Directory.Exists(FaceSdfBake.MaskRoot(prefabPath)))
                 {
-                    FaceSdfBake.Apply(prefabPath, new FaceSdfBake.Report());
                     rep.lines.Add("얼굴 SDF 맵을 다시 넣어 켬: 재질 " + FaceSdfBake.SetUse(prefabPath, true) + "개 (리그 값을 바꿨다면 다시 구울 것)");
                 }
             }

@@ -143,7 +143,7 @@ namespace FBX2NPR.EditorTools
             // 세모·둥근 사다리꼴은 리그에서 고를 수 있다 (둥근 사다리꼴 꼭짓점도 같이 채운다). 길이는 리그가 적용하므로 여기서는 1.
             // 62번: 기본은 초승달(길이 1.6, 두께 0.75, 폭 1.5배, 코끝 쪽이 두꺼움, 사용자 선택). 물방울·세모·둥근 사다리꼴 값도 채워 리그에서 바꿀 수 있다.
             marks.FitNoseMoon(srcs, DefaultLight(), MoonThicknessDefault, 0, false, 1f, MoonBulgeDefault, 1f, DropRadiusDefault, DropHeightDefault);
-            marks.CalibrateLineStop(srcs, centerW, DefaultLight(), 1.0f, 0.35f, 0.015f);   // 변환 도구와 같은 규칙: 선이 눈을 가르는 캐릭터만 눈꼬리 바깥으로
+            marks.CalibrateLineStop(srcs, centerW, DefaultLight(), 0.015f);   // 변환 도구와 같은 규칙: 선이 눈을 가르는 캐릭터만 눈꼬리 바깥으로
             Debug.Log("[FBX2NPR 미리보기] " + c + " " + marks.noseStopNote + " / " + marks.moonNote + " / " + marks.lineStopNote);
 
             bool silFace = HandPainted.Contains(c);

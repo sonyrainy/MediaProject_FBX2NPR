@@ -80,7 +80,33 @@ float LineFromCenter(float c)
     return saturate((c - _CurveStop) / max(FACE_REF_COS - _CurveStop, 1e-4));
 }
 
+#define CHIN_MIN_WIDTH 0.12    // 턱 끝에서 남는 폭 비율. 0 이면 모든 선이 턱 끝 한 점에 모이고, 이 값만큼 선이 그림자 쪽에 남는다
+
+// 턱 쪽 얼굴 폭 비율: 휘기 시작하는 높이에서 1, 턱 끝에서 CHIN_MIN_WIDTH.
+// 타원 꼴이라 위에서는 곡선이 부드럽게 시작하고, 턱 끝에서는 턱선을 따라 눕는다. _ChinBend 0.35 면 코끝 높이에서 시작한다.
+float ChinNarrow(float3 positionWS, float3 up)
+{
+    float span = max(_ChinScale * _ChinBend / 0.35, 1e-4);
+    float t    = saturate(1.0 - (dot(positionWS - _NoseTip.xyz, up) + _ChinScale) / span);
+    return pow(lerp(1.0, max(sqrt(saturate(1.0 - t * t)), CHIN_MIN_WIDTH), saturate(_CurveTilt)), max(_CurveTilt, 1.0));
+}
+
+// 턱으로 갈수록 좁아지는 얼굴에서 잰 수평 ndotl. narrow 가 1 이면 HorizNdotL 과 같다.
+// 지구본의 경선이 극점으로 모이듯, 명암선이 어느 빛에서든 턱선을 따라 턱 끝으로 저절로 모인다.
+// 임계값을 턱 끝에서 끌어올리는 방식은 선이 마지막에 억지로 꺾이거나, 턱 끝을 넘거나, 턱선에 부딪혀 끊겼다.
+float FaceLineNdotL(float3 n, float narrow, float3 lhN, float3 up)
+{
+    float3 fwd   = normalize(_FaceForward.xyz);
+    float3 right = normalize(cross(up, fwd));
+    float3 h     = n - up * dot(n, up);
+    float  hl    = length(h);
+    float2 hv    = float2(dot(h, right) / narrow, dot(h, fwd));
+    float2 lv    = float2(dot(lhN, right), dot(lhN, fwd));
+    return dot(hv, lv) / max(length(hv), 1e-4) * (hl / max(hl, 0.35));
+}
+
 #define NOSE_WANE_FADE 4.0     // 남는 비율이 1/이 값 아래로 내려가면 농도도 함께 빠진다: 얇은 호가 실선처럼 남지 않는다
+#define NOSE_RISE_FADE 2.0     // 빛이 정면에서 옆으로 갈 때 fL 이 1/이 값이 될 때까지 농도가 차오른다
 #define NOSE_PULL_REACH 1.0    // 명암선이 바깥 호에서 이만큼(코 도형 폭의 배수) 가까워지면 코 쪽으로 휘기 시작한다
 #define NOSE_PULL 0.7          // 명암선이 코 쪽으로 휘는 양의 상한 (코 도형 세로 반높이의 배수)
 #define NOSE_PULL_UP 2.5       // 휘는 구간의 세로 폭 (코 도형 세로 반높이의 배수): 콧대 쪽
@@ -120,6 +146,17 @@ float NoseWane(float c)
 #endif
 }
 
+// 코 그림자 농도. 막 생기거나 사라지는 아주 얇은 호는 실선처럼 보여서 농도도 함께 뺀다. 기준 빛에서는 1. 구울 때는 칸마다 켜고 끈 값만 담으므로 1.
+float NoseFade(float c)
+{
+#ifdef FACE_MASK_BAKE
+    return 1.0;
+#else
+    float cosR = sqrt(saturate(1.0 - _NoseMoonParam.x * _NoseMoonParam.x));
+    return saturate(NoseWane(c) * NOSE_WANE_FADE) * saturate((1.0 - c) / max(1.0 - cosR, 1e-3) * NOSE_RISE_FADE);
+#endif
+}
+
 // 명암선을 코 쪽으로 살짝 휘게 하는 양 (수평 ndotl 단위). 코 그림자가 사라지는 동안 선이 그 자리를 조금 대신한다.
 // 선이 코 도형까지 끌려가게 하면 그림자가 S 자로 크게 휘고 코까지 팔처럼 뻗었다. 그래서 양을 코 크기로 묶는다.
 float NoseLinePull(float3 positionWS, float c, float3 up)
@@ -140,16 +177,11 @@ FaceShade EvalFaceRule(float3 positionWS, float3 n, float3 origWS, float3 lhN, f
     // 눈 피하기: 눈 타원 안에서는 임계값을 낮춰 밝게 둔다. 마스크가 부드럽게 줄어드니
     // 명암선이 타원 가장자리를 따라 눈 바깥으로 휘어 돌고, 눈 위아래에서 원래 선으로 이어진다.
     float stopC = _CurveStop;
-    // 지수함수 꼴 명암선: 턱 끝(t=0)에서 임계값을 가장 크게 올려 선을 턱 끝까지 끌어오고,
-    // 위로 갈수록 exp(-t) 로 빠르게 사라져 옆면에서는 세로 한 줄로 돌아간다. 턱 끝 아래(목)는 계속 어둡다.
+    // 턱 끝 아래(목)는 계속 어둡다. 지수는 8 에서 자른다: 몸통처럼 턱보다 한참 아래 정점에서 exp 가 무한대가 되면 smoothstep 이 NaN 을 낸다.
     if (_CurveTilt > 0.0001)
     {
         float hC = dot(positionWS - _NoseTip.xyz, up) + _ChinScale;           // 턱 끝 기준 높이 (m)
-        // 지수는 8 에서 자른다: 몸통처럼 턱보다 한참 아래 정점에서 exp 가 무한대가 되면 smoothstep 이 NaN 을 낸다.
-        float eC = exp(min(-hC / max(_ChinScale * _ChinBend, 1e-4), 8.0));
-        // 당기는 양이 고정이면 옆빛에서 선이 턱 끝을 넘어 빛 쪽 턱까지 덮었다. 선이 중앙으로 온 만큼 줄여 턱 끝을 지나게 한다.
-        // 턱 끝 아래(1 을 넘는 부분)는 줄이지 않는다: 턱 밑은 어느 빛에서도 어둡다.
-        stopC += _CurveTilt * (min(eC, 1.0) * LineFromCenter(dot(lhN, normalize(_FaceForward.xyz))) + max(eC - 1.0, 0.0));
+        stopC += _CurveTilt * max(exp(min(-hC / max(_ChinScale * _ChinBend, 1e-4), 8.0)) - 1.0, 0.0);
     }
     if (_EyeAvoid > 0.0001 || _NoseDebug > 0.5)
     {
@@ -207,7 +239,7 @@ FaceShade EvalFaceRule(float3 positionWS, float3 n, float3 origWS, float3 lhN, f
         litA = smoothstep(-_AnchorSoft, _AnchorSoft, uB - uP);   // 선보다 빛 쪽이면 밝음
         s.anchorDbg = step(min(length(positionWS - Cp), length(positionWS - Jp)), 0.003);
     }
-    float vMain = HorizNdotL(n, lhN, up);
+    float vMain = FaceLineNdotL(n, ChinNarrow(positionWS, up), lhN, up);
     if (_NoseMoon > 0.5) vMain -= NoseLinePull(positionWS, dot(lhN, normalize(_FaceForward.xyz)), up);
     s.lit = (litA >= 0.0) ? litA : smoothstep(stopC - _CurveSoft, stopC + _CurveSoft, vMain);
     // 54번 코 반달 → 55번 초승달: 코가 평평한 캐릭터(유니티짱)는 원본 노멀 그림자가 큰 메시 면을 따라 꺾여 사다리꼴이 됐다.
@@ -274,7 +306,7 @@ FaceShade EvalFaceRule(float3 positionWS, float3 n, float3 origWS, float3 lhN, f
             dM = (thick > 1e-3) ? min(min(dOut, dIn), bM - abs(vM)) : -1.0;
         }
         float  eM     = max(fwidth(dM) * 0.75, 1e-6);              // 경계 1~2 픽셀 (53번과 같은 이유)
-        float  shM    = smoothstep(-eM, eM, dM) * step(-_NoseMoonParam.y, dot(relM, fwdM)) * step(1e-3, fL) * saturate(NoseWane(dot(lhN, fwdM)) * NOSE_WANE_FADE);
+        float  shM    = smoothstep(-eM, eM, dM) * step(-_NoseMoonParam.y, dot(relM, fwdM)) * step(1e-3, fL) * NoseFade(dot(lhN, fwdM));
         s.noseShade = shM;
         s.noseDbg = shM;
     }
