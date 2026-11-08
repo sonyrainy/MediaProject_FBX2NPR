@@ -602,6 +602,7 @@ namespace FBX2NPR.EditorTools
         public const float LineStopDefault = -0.20f;   // 변환 도구의 기본 명암선 위치 (ToonFaceRig.linePosition)
         public const float LineStopMin = -0.55f;       // 더 낮추면 기준 빛(35°)에서 얼굴 앞반구가 통째로 밝아진다 (앞면의 수평 ndotl 최소 -sin35° = -0.57)
         public const float LineCornerMargin = 0.30f;   // 명암선을 보낼 자리: 눈꼬리에서 눈 반폭의 30% 바깥
+        public const float LineFaceWidth = 0.75f;      // 기준 빛의 명암선이 코 높이에서 얼굴 중앙부터 반폭의 이 비율보다 안쪽으로 들어오지 않게 한다
         public float lineStop = LineStopDefault;
         public string lineStopNote = "명암선 위치 보정 안 함";
 
@@ -610,15 +611,15 @@ namespace FBX2NPR.EditorTools
         /// Emma(일반 스타일 3D)는 방사형 중심(얼굴 정점 평균, 촘촘한 눈·입 쪽으로 쏠림)이 눈 높이 표면 1.4cm 뒤라(Ch07 2.6cm)
         /// 눈 자리 노멀이 이미 옆을 보고, 같은 -0.20 에서 선이 눈 한가운데를 갈라 눈·눈썹이 그늘에 묻혔다.
         /// 그래서 기준 빛에서 그림자 쪽 눈 한가운데(앞면 표면점)가 그늘이면, 눈꼬리 바깥 표면점이 확실히 밝아질 만큼만 낮춘다.
-        /// 눈 한가운데가 밝으면 기본값을 그대로 둔다. 눈을 비율로 추정한 모델은 자리가 틀릴 수 있어 옮기지 않는다.
+        /// 눈 한가운데가 밝으면 기본값을 그대로 둔다. 눈을 비율로 추정한 모델은 자리가 틀릴 수 있어 이 규칙은 쓰지 않는다.
+        /// 그와 별개로 모든 얼굴은 코 높이 볼 기준점(LineFaceWidth)이 밝도록 맞춘다.
         /// '눈 피하기'(타원 안만 밝힘)도 시험했지만 눈썹 바깥과 앞볼이 그늘로 남아 선이 눈 둘레에서 꺾였다. 선을 통째로 옮기면 한 줄로 내려간다.
         /// radialCenter: 얼굴 방사형 노멀의 중심(월드). 얼굴 가중치 1 인 표면의 노멀은 그 중심에서 나가는 방향이다.
         /// </summary>
         public void CalibrateLineStop(List<Src> parts, Vector3 radialCenter, Vector3 lightDir, float lineSoftness)
         {
             lineStop = LineStopDefault;
-            if (!faceFound || !noseFound || !eyesFound) { lineStopNote = "명암선 위치: 기본값 (눈·코끝 없음)"; return; }
-            if (eyesEstimated) { lineStopNote = "명암선 위치: 기본값 (눈을 비율로 추정해서 옮기지 않음)"; return; }
+            if (!faceFound || !noseFound) { lineStopNote = "명암선 위치: 기본값 (얼굴·코끝 없음)"; return; }
             float lx = Mathf.Abs(lightDir.x), lz = lightDir.z;
             if (lx * lx + lz * lz < 1e-8f) { lineStopNote = "명암선 위치: 기본값 (빛이 수직)"; return; }
             var sb = new System.Text.StringBuilder();
@@ -628,18 +629,29 @@ namespace FBX2NPR.EditorTools
                 bool b = side == 0;
                 Vector3 eye = b ? eyeB : eyeA;
                 Vector3 lh = new Vector3(b ? lx : -lx, 0f, lz).normalized;
+                float sideX = b ? -1f : 1f;
+                // 얼굴 폭 기준: 눈 위치가 추정이어도 쓸 수 있다. 눈 위치로 재면 노멀이 눈 높이에서 급하게 벌어지는 얼굴(유니티짱)은 값이 크게 튀었다.
+                bool okW;
+                Vector3 pw = FrontSurface(parts, new Vector2(noseTip.x + sideX * NoseHalfWidth(parts, sideX) * LineFaceWidth, noseTip.y), out okW);
+                if (okW)
+                {
+                    float vW = HorizLit(pw - radialCenter, lh);
+                    lineStop = Mathf.Min(lineStop, LineStopForWidth(vW, lineSoftness));
+                    sb.AppendFormat(CultureInfo.InvariantCulture, "{0}쪽 {1} 볼 {2:F2}", sb.Length > 0 ? " / " : "", b ? "B" : "A", vW);
+                }
+                if (!eyesFound || eyesEstimated) continue;
                 bool okC, okK;
                 Vector3 pc = FrontSurface(parts, new Vector2(eye.x, eye.y), out okC);
-                Vector3 pk = FrontSurface(parts, new Vector2(eye.x + (b ? -1f : 1f) * eyeHalfWidth * (1f + LineCornerMargin), eye.y), out okK);
+                Vector3 pk = FrontSurface(parts, new Vector2(eye.x + sideX * eyeHalfWidth * (1f + LineCornerMargin), eye.y), out okK);
                 if (!okC || !okK) continue;
                 float vC = HorizLit(pc - radialCenter, lh), vK = HorizLit(pk - radialCenter, lh);
                 bool moved;
                 float s = LineStopFor(vC, 0f, vK, 0f, lineSoftness, out moved);   // 턱 쪽 곡선은 코끝 아래에서만 작동해 눈 높이의 문턱은 위치 그대로다
                 lineStop = Mathf.Min(lineStop, s);
-                sb.AppendFormat(CultureInfo.InvariantCulture, "{0}눈 {1} 한가운데 {2:F2}{3}, 눈꼬리 바깥 {4:F2}", sb.Length > 0 ? " / " : "", b ? "B" : "A", vC, moved ? " (그늘)" : "", vK);
+                sb.AppendFormat(CultureInfo.InvariantCulture, ", 눈 한가운데 {0:F2}{1}, 눈꼬리 바깥 {2:F2}", vC, moved ? " (그늘)" : "", vK);
             }
             lineStopNote = string.Format(CultureInfo.InvariantCulture, "명암선 위치: {0:F2}{1} (기준 빛에서 {2})",
-                lineStop, lineStop < LineStopDefault ? " — 선이 눈을 갈라 눈꼬리 바깥으로 옮김" : " 기본값", sb);
+                lineStop, lineStop < LineStopDefault ? " — 선을 바깥쪽으로 옮김" : " 기본값", sb);
         }
 
         /// <summary>
@@ -651,6 +663,33 @@ namespace FBX2NPR.EditorTools
             moved = vCenter < LineStopDefault + liftCenter;
             if (!moved) return LineStopDefault;
             return Mathf.Clamp(vCorner - liftCorner - softness, LineStopMin, LineStopDefault);
+        }
+
+        /// <summary>
+        /// 볼의 기준점(LineFaceWidth)이 밝아지는 명암선 위치. 그 점이 이미 밝으면 기본값 그대로다.
+        /// 방사형 중심이 표면에 가까운 얼굴(유니티짱)은 기본값의 선이 볼 안쪽 깊이 들어와 그림자가 넓어졌다.
+        /// </summary>
+        internal static float LineStopForWidth(float vCheek, float softness)
+        {
+            return Mathf.Clamp(vCheek - softness, LineStopMin, LineStopDefault);
+        }
+
+        // 코 높이에서 얼굴 중앙부터 한쪽 가장자리까지의 폭 (앞면 정점만). side 는 -1 또는 1
+        float NoseHalfWidth(List<Src> parts, float side)
+        {
+            float zMin = noseTip.z - 0.4f * face.size.z, band = 0.03f * face.size.y, w = 0f;
+            foreach (var p in parts)
+            {
+                if (!p.isFace || p.weights == null) continue;
+                for (int i = 0; i < p.world.Length; i++)
+                {
+                    if (p.weights[i] < 0.5f) continue;
+                    var v = p.world[i];
+                    if (v.z < zMin || Mathf.Abs(v.y - noseTip.y) > band) continue;
+                    w = Mathf.Max(w, (v.x - noseTip.x) * side);
+                }
+            }
+            return w;
         }
 
         public float noseRadial = 0.06f;   // 코 옆 표면에서 방사형 노멀 중심까지 수평 거리 (m)

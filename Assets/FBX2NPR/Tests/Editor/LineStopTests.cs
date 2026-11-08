@@ -31,6 +31,19 @@ namespace FBX2NPR.Tests
         }
 
         [Test]
+        public void CheekKeepsDefaultWhenItIsAlreadyLit()
+        {
+            Assert.That(FaceLandmarks.LineStopForWidth(-0.10f, Soft), Is.EqualTo(FaceLandmarks.LineStopDefault));
+        }
+
+        [Test]
+        public void CheekPullsTheLineOutWhenItIsShaded()
+        {
+            Assert.That(FaceLandmarks.LineStopForWidth(-0.40f, Soft), Is.EqualTo(-0.40f - Soft).Within(1e-6f));
+            Assert.That(FaceLandmarks.LineStopForWidth(-0.80f, Soft), Is.EqualTo(FaceLandmarks.LineStopMin));
+        }
+
+        [Test]
         public void NeverGoesBelowTheFloor()
         {
             bool moved;
