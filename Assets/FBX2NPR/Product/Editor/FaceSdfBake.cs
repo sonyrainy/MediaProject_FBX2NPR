@@ -49,6 +49,8 @@ namespace FBX2NPR.EditorTools
 
         static string Safe(string s) { foreach (var c in Path.GetInvalidFileNameChars()) s = s.Replace(c, '_'); return s; }
 
+        static int Round4(float v) { return Mathf.Max(8, Mathf.RoundToInt(v / 4f) * 4); }
+
         static string MaskFile(string dir, string kind, int side, int deg) { return string.Format(CultureInfo.InvariantCulture, "{0}/{1}_{2}_{3:000}.png", dir, kind, side > 0 ? "r" : "l", deg); }
 
         /// <summary>마스크를 굽고 맵까지 합친다. 재질에 맵을 넣지만 켜지는 않는다 (SetUse).</summary>
@@ -78,9 +80,10 @@ namespace FBX2NPR.EditorTools
                     float share = total > 0 ? (float)(g.frontArea / total) : 0f;
                     if (share < MinFrontShare) { rep.lines.Add(string.Format(CultureInfo.InvariantCulture, "{0}: 얼굴 앞면의 {1:P1}라 규칙으로 둠", g.name, share)); continue; }
                     if (!g.uvInit) continue;
+                    // 가로·세로는 4의 배수로 맞춘다. 맵을 BC7 로 압축하는데, 블록 압축은 4x4 칸 단위라 4의 배수가 아니면 유니티가 말없이 무압축으로 둔다 (1023x1024, 1024x589 맵).
                     int W, H;
-                    if (g.uv.width >= g.uv.height) { W = size; H = Mathf.Max(8, Mathf.RoundToInt(size * g.uv.height / g.uv.width)); }
-                    else { H = size; W = Mathf.Max(8, Mathf.RoundToInt(size * g.uv.width / g.uv.height)); }
+                    if (g.uv.width >= g.uv.height) { W = Round4(size); H = Round4(size * g.uv.height / g.uv.width); }
+                    else { H = Round4(size); W = Round4(size * g.uv.width / g.uv.height); }
                     rt = new RenderTexture(W, H, 0, RenderTextureFormat.ARGB32, RenderTextureReadWrite.Linear) { filterMode = FilterMode.Point }; rt.Create();
                     read = new Texture2D(W, H, TextureFormat.RGBA32, false, true);
                     string dir = maskRoot + "/" + Safe(g.name);
@@ -163,10 +166,13 @@ namespace FBX2NPR.EditorTools
                 imp.textureType = TextureImporterType.Default; imp.sRGBTexture = false; imp.mipmapEnabled = false; imp.alphaIsTransparency = false;
                 imp.alphaSource = TextureImporterAlphaSource.FromInput;
                 imp.wrapMode = TextureWrapMode.Clamp; imp.filterMode = FilterMode.Bilinear; imp.npotScale = TextureImporterNPOTScale.None;
-                imp.textureCompression = TextureImporterCompression.Uncompressed; imp.maxTextureSize = 8192;
+                // 고품질 압축 (PC 에서 BC7): 무압축의 1/4. 2026-11-09 시험에서 명암선 값 오차는 99.9% 가 1.4° 안, 근접 화면 차이 없음.
+                // 밉맵은 끈 채로 둔다: 값이 빛 각도라 부드럽게 변해서, 얼굴이 작게 보여도 밉맵 유무로 깜빡임이 달라지지 않았다.
+                imp.textureCompression = TextureImporterCompression.CompressedHQ; imp.maxTextureSize = 8192;
                 imp.SaveAndReimport();
                 rep.maps.Add(path);
                 rep.lines.Add(string.Format(CultureInfo.InvariantCulture, "맵 저장: {0} ({1}x{2}, 합치기 {3:F1}초)", path, W, H, sw.Elapsed.TotalSeconds));
+                if (W % 4 != 0 || H % 4 != 0) rep.lines.Add("  맵 크기가 4의 배수가 아니라 압축되지 않습니다 (예전에 구운 마스크). 다시 구우면 맞춰집니다.");
             }
             AssetDatabase.SaveAssets();
             Apply(prefabPath, rep);
