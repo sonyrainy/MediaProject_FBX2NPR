@@ -219,6 +219,10 @@ namespace FBX2NPR.EditorTools
                 var normalEdit = FaceNormalEdit.LoadFor(modelPath);
                 if (normalEdit != null)
                     foreach (var p in parts) { string note = normalEdit.ApplyTo(p.mesh); if (note != null) rep.lines.Add(note); }
+                // ---- 1b) 머리카락 노멀: 머리 중심 캡슐(위는 구, 아래는 끝까지 세로 원통) 바깥 방향과 섞는다 (HairNormals, 설정 hairNormalMix).
+                //      가닥마다 노멀이 제각각이라 툰 명암이 머리카락을 회색 조각으로 가르던 것을 한 덩어리로 정리한다.
+                //      외곽선은 바뀌지 않는다. 얼굴 밖 재질은 선용 노멀로 메시 노멀 대신 카메라 방향을 쓴다 (_OutlineFlatNormal).
+                if (crit.hairNormalMix > 0f) ApplyHairNormals(parts, crit, rep);
                 // 원본 노멀을 지금 노멀·탄젠트 기준(탄젠트 공간)으로 UV4 에 싣는다. 스키닝이 노멀·탄젠트를 돌리면 함께 돈다 (OriginalNormals).
                 foreach (var p in parts) OriginalNormals.Write(p.mesh, p.origN);
 
@@ -1108,6 +1112,64 @@ namespace FBX2NPR.EditorTools
             string p = basePath + ext; int k = 2;
             while (!used.Add(p)) p = basePath + "_" + (k++) + ext;
             return p;
+        }
+
+        /// <summary>
+        /// 머리카락 재질 칸의 정점만 머리 중심 캡슐 방향과 섞는다 (HairNormals).
+        /// 캡슐 위쪽 구의 중심은 머리 범위(머리 뼈에 묶인 정점)의 중심이고, 그 아래는 끝까지 세로 원통이다 (어깨 아래로 내려오는 긴 머리도 수평).
+        /// </summary>
+        static void ApplyHairNormals(List<Part> parts, FBX2NPRAssetSettings crit, Report rep)
+        {
+            bool init = false; var head = new Bounds();
+            foreach (var p in parts)
+            {
+                if (p.boundsW == null) continue;
+                var v = p.mesh.vertices;
+                for (int i = 0; i < v.Length && i < p.boundsW.Length; i++)
+                {
+                    if (p.boundsW[i] <= 0f) continue;
+                    var w = p.l2w.MultiplyPoint3x4(v[i]);
+                    if (!init) { head = new Bounds(w, Vector3.zero); init = true; } else head.Encapsulate(w);
+                }
+            }
+            if (!init) { rep.lines.Add("머리카락 노멀: 머리 범위를 찾지 못해 건너뜀"); return; }
+            Vector3 center = head.center;
+            int nMesh = 0, nVert = 0;
+            foreach (var p in parts)
+            {
+                if (p.FaceRend) continue;   // 얼굴 메시는 위에서 정리했다
+                var mask = HairMask(p, crit); if (mask == null) continue;
+                var v = p.mesh.vertices; var n = p.mesh.normals;
+                if (n == null || n.Length != v.Length) continue;
+                var toW = p.l2w.inverse.transpose; var toL = p.l2w.transpose;   // 노멀은 역전치 행렬로 월드에, 그 역(전치)으로 다시 로컬에
+                var wp = new Vector3[v.Length]; var wn = new Vector3[v.Length];
+                for (int i = 0; i < v.Length; i++) { wp[i] = p.l2w.MultiplyPoint3x4(v[i]); wn[i] = toW.MultiplyVector(n[i]).normalized; }
+                var outW = HairNormals.Apply(wp, wn, center, crit.hairNormalMix, mask);
+                var outL = new Vector3[v.Length];
+                for (int i = 0; i < v.Length; i++) outL[i] = mask[i] ? toL.MultiplyVector(outW[i]).normalized : n[i];
+                p.mesh.normals = outL;
+                p.mesh.RecalculateTangents();   // 원본 노멀을 UV4 에 실을 때 새 노멀·탄젠트를 축으로 쓴다
+                nMesh++; foreach (bool b in mask) if (b) nVert++;
+            }
+            if (nMesh > 0)
+                rep.lines.Add(string.Format(CultureInfo.InvariantCulture, "머리카락 노멀: 메시 {0}개, 정점 {1}개를 머리 중심 캡슐 방향과 섞음 (세기 {2:F2}, 설정 hairNormalMix) / 캡슐 위쪽 구 중심 {3}",
+                    nMesh, nVert, crit.hairNormalMix, center.ToString("F3")));
+        }
+
+        /// <summary>머리카락 재질 칸(서브메시)에 속한 정점. 머리카락 칸이 없으면 null. 재질 이름 또는 그 칸의 알베도 텍스처 이름으로 판정한다 (IsHairSlot).</summary>
+        static bool[] HairMask(Part p, FBX2NPRAssetSettings crit)
+        {
+            if (p.srcMats == null) return null;
+            var mask = new bool[p.mesh.vertexCount]; bool any = false;
+            int subs = Mathf.Min(p.mesh.subMeshCount, p.srcMats.Length);
+            for (int s = 0; s < subs; s++)
+            {
+                var alb = p.slotAlbedo != null && s < p.slotAlbedo.Length ? p.slotAlbedo[s] : null;
+                if (!crit.IsHairSlot(p.srcMats[s], alb)) continue;
+                foreach (int vi in p.mesh.GetTriangles(s)) mask[vi] = true;
+                any = true;
+            }
+            return any ? mask : null;
         }
 
         /// <summary>이름에 머리 본 문자열이 든 트랜스폼 중 가장 얕은 것 (믹사모의 Head 와 HeadTop_End 중 Head).</summary>

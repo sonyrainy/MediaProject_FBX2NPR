@@ -85,6 +85,42 @@ namespace FBX2NPR
         public string excludeMeshContains = "hair;eyelash;lash;teeth;tooth;cigar;hat;brow;beard";
 
         /// <summary>
+        /// 머리카락 노멀을 머리 중심 캡슐(머리 위쪽은 구, 그 아래는 끝까지 세로 원통) 바깥 방향과 섞는 세기. 0 = 원본 그대로, 1 = 캡슐 방향.
+        /// 머리카락은 가닥(판)마다 노멀이 제각각이라 툰 명암이 머리카락을 회색 조각으로 갈랐다. 섞으면 머리 전체가 한 덩어리로 명암을 받는다 (2026-11-11).
+        /// 툰 재질(ToonBand)의 외곽선은 바뀌지 않는다. 얼굴 밖 재질은 선용 노멀로 메시 노멀 대신 카메라 방향을 쓴다 (_OutlineFlatNormal).
+        /// </summary>
+        [Range(0f, 1f)] public float hairNormalMix = 1f;
+
+        /// <summary>
+        /// 머리카락으로 볼 재질 칸: 재질 이름이나 그 칸의 알베도 텍스처 이름에 포함될 문자열 (세미콜론 구분).
+        /// 메시 이름으로 고르면 머리띠·머리 장신구(재질 body·cloth)까지 들어온다. Night Dress 처럼 재질 이름이 메시 이름(PSphere2)인 모델은 텍스처 이름(hair_m_baseColor)으로만 알 수 있다.
+        /// 머리카락 재질·텍스처를 같이 쓰는 머리카락 아닌 메시도 들어온다 (Night Dress 머리띠 PCylinder1, Felis 귀·꼬리, Ch07 속눈썹).
+        /// 시험 모델 16명 전후 비교에서 바뀐 화소가 머리카락과 이 메시들에만 있었고 눈에 띄는 차이가 없어 그대로 둔다 (2026-11-11).
+        /// </summary>
+        public string hairMaterialContains = "hair";
+
+        /// <summary>재질 이름 또는 재질의 메인 텍스처 이름으로 머리카락 칸인지 판정합니다.</summary>
+        public bool IsHairMaterial(Material m)
+        {
+            if (m == null) return false;
+            return IsHairName(m.name) || (m.mainTexture != null && IsHairName(m.mainTexture.name));
+        }
+
+        /// <summary>재질과, 변환기가 그 칸에 연결한 알베도 텍스처(끊긴 링크를 이어 붙인 것 포함)로 판정합니다.</summary>
+        public bool IsHairSlot(Material m, Texture albedo)
+        {
+            return IsHairMaterial(m) || (albedo != null && IsHairName(albedo.name));
+        }
+
+        bool IsHairName(string name)
+        {
+            if (string.IsNullOrEmpty(name)) return false;
+            string n = name.ToLowerInvariant();
+            foreach (var s in Split(hairMaterialContains)) if (s.Length > 0 && n.Contains(s)) return true;
+            return false;
+        }
+
+        /// <summary>
         /// FBX 안의 텍스처 링크가 끊긴 에셋용. "재질명=텍스처명;..." 형식.
         /// 유니티짱 FBX 는 마야 절대경로(D:/Dropbox/...)만 들고 있어 유니티가 텍스처를 못 찾는다 (임포트 검사에서 실측).
         /// </summary>

@@ -51,7 +51,7 @@ namespace FBX2NPR
         /// 두 방식은 t=0 과 t=1 에서만 같고, 사이에서는 두 벡터의 사잇각이 클수록 크게 갈라집니다.
         /// 이 메시에는 사잇각이 161도까지 있어서 차이가 그대로 드러났습니다.
         /// </summary>
-        static Vector3 SlerpSafe(Vector3 a, Vector3 b, float t)
+        internal static Vector3 SlerpSafe(Vector3 a, Vector3 b, float t)
         {
             float d = Mathf.Clamp(Vector3.Dot(a, b), -1f, 1f);
             float theta = Mathf.Acos(d);
