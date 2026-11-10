@@ -69,6 +69,7 @@ Shader "NormalTest/ToonBand"
         _NoseMoonShape ("반달: x 코 중심선에서 곧은 변까지, y 중심 높이(코끝 기준), z 폭, w 반높이 (미터)", Vector) = (0.001, 0.005, 0.005, 0.008)
         _NoseMoonParam ("코 도형: x 기준 빛의 옆 성분, y 깊이 한계 (미터), z 초승달 두께 (0 없음 ~ 1 반달), w 모양 (0 초승달, 1 세모, 2 둥근 사다리꼴, 3 물방울)", Vector) = (0.57, 0.02, 0.5, 0)
         _NoseMoonExtra ("초승달: x 가장 두꺼운 곳 위치 (-0.9 아래 ~ 0.9 위, 0 가운데), y 코 옆 표면에서 방사형 노멀 중심까지 수평 거리 (미터)", Vector) = (0, 0.06, 0, 0)
+        _NoseLitMoon   ("밝은 코 초승달: 명암선이 코를 넘은 뒤 그늘 속에 코 옆을 밝게 (리그가 넣음, 초승달 모양일 때만)", Range(0,1)) = 0
         // 둥근 사다리꼴 (57번): 원래 원본 노멀 그림자의 윤곽을 사각형으로 줄이고 모서리를 둥글게. 꼭짓점은 반지름만큼 안쪽으로 줄여 둔 값.
         _NosePolyA     ("둥근 사다리꼴 꼭짓점 0·1 (그림자 쪽 가로, 세로: 코끝 기준 m)", Vector) = (0, 0, 0, 0)
         _NosePolyB     ("둥근 사다리꼴 꼭짓점 2·3", Vector) = (0, 0, 0, 0)
@@ -301,11 +302,12 @@ Shader "NormalTest/ToonBand"
                         float3 lhN = lh / lhl;
                         // 얼굴 명암: 규칙으로 계산하거나(ToonFaceRule.hlsl), 구워 둔 SDF 맵을 읽는다(FaceSDF.hlsl). 재질의 _FACE_SDF 키워드가 고른다.
                     #if defined(_FACE_SDF)
-                        FaceShade face = EvalFaceSdf(i.uv, lhN, up);
+                        FaceShade face = EvalFaceSdf(i.uv, i.positionWS, lhN, up);
                     #else
                         FaceShade face = EvalFaceRule(i.positionWS, n, i.origWS, lhN, up);
                     #endif
                         lit = min(face.lit, 1.0 - face.noseShade * _NoseShade);
+                        lit = max(lit, face.noseLit * _NoseShade);   // 그림자 초승달과 같은 세기로 그늘을 걷어 낸다 (대칭)
                         noseDbg = face.noseDbg; eyeDbg = face.eyeDbg; anchorDbg = face.anchorDbg;
                     }
                     if (urp) lit = min(lit, shFace);

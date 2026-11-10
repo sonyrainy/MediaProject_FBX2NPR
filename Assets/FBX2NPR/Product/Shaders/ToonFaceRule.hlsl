@@ -9,6 +9,7 @@ struct FaceShade
 {
     float lit;         // 큰 명암선: 1 밝음, 0 그늘
     float noseShade;   // 코 그림자가 덮는 정도. 세기(_NoseShade)는 부르는 쪽이 곱한다
+    float noseLit;     // 명암선이 코를 넘은 뒤 그늘 속에 남는 밝은 코 초승달 (_NoseLitMoon). 세기(_NoseShade)는 부르는 쪽이 곱한다
     float noseDbg;     // 영역 표시 (_NoseDebug)
     float eyeDbg;
     float anchorDbg;
@@ -146,6 +147,19 @@ float NoseWane(float c)
 #endif
 }
 
+// 밝은 코 초승달이 차오르는 비율 (NoseWane 의 거울). 명암선이 바깥 호에 닿을 때 0, 거기서 기준 빛 때의 간격만큼 더 지나가면 1.
+// 코는 볼보다 앞으로 나와 있어서, 명암선이 코를 넘어 그쪽 볼이 그늘이 된 뒤에도 코 옆은 빛을 받는 것으로 본다 (사용자 제안, 2026-11-10).
+// 구울 때(FACE_MASK_BAKE)는 0: SDF 맵에는 아직 담지 않는다.
+float NoseWax(float c)
+{
+#ifdef FACE_MASK_BAKE
+    return 0.0;
+#else
+    float gapRef = LineToNose(FACE_REF_COS);
+    return (gapRef > 1e-4) ? saturate(-LineToNose(c) / gapRef) : 0.0;
+#endif
+}
+
 // 코 그림자 농도. 막 생기거나 사라지는 아주 얇은 호는 실선처럼 보여서 농도도 함께 뺀다. 기준 빛에서는 1. 구울 때는 칸마다 켜고 끈 값만 담으므로 1.
 float NoseFade(float c)
 {
@@ -168,11 +182,44 @@ float NoseLinePull(float3 positionWS, float c, float3 up)
     return amp * exp(-vN * vN / (sig * sig)) / max(_NoseMoonExtra.y, 1e-3);
 }
 
+// 밝은 코 초승달 (_NoseLitMoon, 리그가 넣음). 명암선이 코를 넘어 그쪽 볼이 그늘이 된 뒤, 그늘 속에 코 옆을 밝게 남긴다 (사용자 제안, 2026-11-10).
+// 그림자 초승달과 같은 자리·같은 바깥 호이고 색만 빛 쪽이다. 초승달 모양(_NoseMoonParam.w = 0)일 때만 그린다.
+// 그림자 초승달과 대칭으로 움직인다: 명암선이 코를 넘으면 차오르고(NoseWax), 빛이 뒤로 갈수록
+// 정면에서 그림자 초승달이 생길 때를 앞뒤로 뒤집은 비율로 얇아져 뒤(180°)에서 사라진다.
+// 규칙 경로(EvalFaceRule)와 SDF 경로(EvalFaceSdf)가 같이 쓴다. SDF 맵에는 담지 않고 실행 중에 계산한다.
+float NoseLitMoon(float3 positionWS, float3 lhN, float3 up)
+{
+    if (_NoseLitMoon < 0.001 || _NoseMoon < 0.5 || _NoseMoonParam.w > 0.5) return 0.0;
+    float3 fwdM   = normalize(_FaceForward.xyz);
+    float3 rightM = normalize(cross(up, fwdM));
+    float3 relM   = positionWS - _NoseTip.xyz;
+    float  sgnM   = (dot(lhN, rightM) >= 0.0) ? -1.0 : 1.0;                // 그림자 쪽 부호
+    float  cosR   = sqrt(saturate(1.0 - _NoseMoonParam.x * _NoseMoonParam.x));
+    float  cL     = dot(lhN, fwdM);
+    float  fB     = (1.0 + cL) / max(1.0 - cosR, 1e-3);                     // 뒤에서 0, 기준 빛을 앞뒤로 뒤집은 각도에서 1
+    float  wax    = NoseWax(cL);
+    float  thL    = _NoseMoonParam.z * min(fB, 1.0) * wax;
+    float  aM     = max(_NoseMoonShape.z, 1e-5);
+    float  bM     = max(_NoseMoonShape.w, 1e-5);
+    float  uM     = dot(relM, rightM) * sgnM - _NoseMoonShape.x;
+    float  vM     = dot(relM, up) - _NoseMoonShape.y;
+    float  qv     = clamp(vM / bM, -1.0, 1.0);
+    float  sB     = clamp(_NoseMoonExtra.x, -0.9, 0.9);
+    float  qw     = (qv - sB) / (1.0 - sB * qv);
+    float  prof   = sqrt(saturate(1.0 - qw * qw));
+    float  dOut   = aM * prof - uM;
+    float  dIn    = uM - aM * (1.0 - thL) * prof;
+    float  dL     = (thL > 1e-3) ? min(min(dOut, dIn), bM - abs(vM)) : -1.0;
+    float  eL     = max(fwidth(dL) * 0.75, 1e-6);
+    float  fadeL  = saturate(wax * NOSE_WANE_FADE) * saturate(fB * NOSE_RISE_FADE);
+    return smoothstep(-eL, eL, dL) * step(-_NoseMoonParam.y, dot(relM, fwdM)) * fadeL * _NoseLitMoon;
+}
+
 // 얼굴 한 점의 규칙 명암. n 은 정리한 노멀, origWS 는 원본 노멀, lhN 은 빛의 수평 방향(정규화), up 은 얼굴 위 방향.
 FaceShade EvalFaceRule(float3 positionWS, float3 n, float3 origWS, float3 lhN, float3 up)
 {
     FaceShade s;
-    s.lit = 1.0; s.noseShade = 0.0; s.noseDbg = 0.0; s.eyeDbg = 0.0; s.anchorDbg = 0.0;
+    s.lit = 1.0; s.noseShade = 0.0; s.noseLit = 0.0; s.noseDbg = 0.0; s.eyeDbg = 0.0; s.anchorDbg = 0.0;
 
     // 눈 피하기: 눈 타원 안에서는 임계값을 낮춰 밝게 둔다. 마스크가 부드럽게 줄어드니
     // 명암선이 타원 가장자리를 따라 눈 바깥으로 휘어 돌고, 눈 위아래에서 원래 선으로 이어진다.
@@ -332,6 +379,7 @@ FaceShade EvalFaceRule(float3 positionWS, float3 n, float3 origWS, float3 lhN, f
         s.noseShade = shN;
         s.noseDbg = mN;
     }
+    s.noseLit = NoseLitMoon(positionWS, lhN, up);
     return s;
 }
 

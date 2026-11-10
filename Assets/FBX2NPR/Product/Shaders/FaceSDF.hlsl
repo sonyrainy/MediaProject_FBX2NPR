@@ -14,8 +14,8 @@ SAMPLER(sampler_FaceSDF);
 
 #define FACE_SDF_MARGIN (2.0 / 255.0)
 
-// uv 는 메시 UV0, lhN 은 빛의 수평 방향(정규화), up 은 얼굴 위 방향.
-FaceShade EvalFaceSdf(float2 uv, float3 lhN, float3 up)
+// uv 는 메시 UV0, positionWS 는 월드 위치(밝은 코 초승달용), lhN 은 빛의 수평 방향(정규화), up 은 얼굴 위 방향.
+FaceShade EvalFaceSdf(float2 uv, float3 positionWS, float3 lhN, float3 up)
 {
     float3 fwd   = normalize(_FaceForward.xyz);
     float3 right = normalize(cross(up, fwd));
@@ -47,6 +47,8 @@ FaceShade EvalFaceSdf(float2 uv, float3 lhN, float3 up)
         s.noseShade *= smoothstep(-eW, eW, wane - born);
     }
     s.noseShade *= NoseFade(dot(lhN, fwd));
+    // 밝은 코 초승달은 맵에 없고 규칙과 같은 식으로 실행 중에 계산한다 (ToonFaceRule.hlsl 의 NoseLitMoon)
+    s.noseLit = NoseLitMoon(positionWS, lhN, up);
     s.noseDbg = 0.0; s.eyeDbg = 0.0; s.anchorDbg = 0.0;
     return s;
 }

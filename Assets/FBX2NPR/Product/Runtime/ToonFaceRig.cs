@@ -76,6 +76,8 @@ namespace FBX2NPR
         [Range(0.5f, 2.5f)] public float moonWidth = 1f;
         [Tooltip("초승달일 때만: 가장 두꺼운 곳의 위치. 음수면 아래(코끝 쪽)가 두껍고 위로 가늘게 빠진다, 0 이면 가운데, 양수면 위가 두껍다.")]
         [Range(-0.8f, 0.8f)] public float moonBulge = 0f;
+        [Tooltip("초승달일 때만: 명암선이 코를 넘어 그쪽 볼이 그늘이 된 뒤에도, 코는 앞으로 나와 있으니 그늘 속에 코 옆을 밝은 초승달로 남긴다. 그림자 초승달과 대칭으로 차오르고, 빛이 뒤로 갈수록 얇아져 사라진다.")]
+        public bool noseLitMoon = true;
         [Tooltip("x 코 중심선에서 콧선 쪽 기준선(세모의 세로 변, 초승달의 두 끝)까지, y 중심 높이(코끝 기준, 위가 +), z 폭(세모의 밑변), w 반높이 (미터). 세모의 밑변 폭은 빛이 옆으로 갈수록 넓어진다(최대 1.5배).")]
         public Vector4 moonShape = new Vector4(0.0008f, -0.0012f, 0.0059f, 0.0052f);
         [Tooltip("x 기준 빛의 옆 성분(이때 두께가 위 값 그대로), y 코끝 뒤로 얼마까지 그리는지 (미터)")]
@@ -155,6 +157,7 @@ namespace FBX2NPR
             public static readonly int NoseLineFade = Shader.PropertyToID("_NoseLineFade"), NoseStop = Shader.PropertyToID("_NoseStop"), NoseMoon = Shader.PropertyToID("_NoseMoon");
             public static readonly int NoseMoonShape = Shader.PropertyToID("_NoseMoonShape"), NoseMoonParam = Shader.PropertyToID("_NoseMoonParam"), NoseMoonExtra = Shader.PropertyToID("_NoseMoonExtra");
             public static readonly int NosePolyA = Shader.PropertyToID("_NosePolyA"), NosePolyB = Shader.PropertyToID("_NosePolyB"), NosePolyParam = Shader.PropertyToID("_NosePolyParam");
+            public static readonly int NoseLitMoon = Shader.PropertyToID("_NoseLitMoon");
             public static readonly int EyeAvoid = Shader.PropertyToID("_EyeAvoid"), EyeA = Shader.PropertyToID("_EyeA"), EyeB = Shader.PropertyToID("_EyeB"), EyeRadius = Shader.PropertyToID("_EyeRadius");
             public static readonly int RimLight = Shader.PropertyToID("_RimLight"), FaceShadowReceive = Shader.PropertyToID("_FaceShadowReceive"), ShadowReceive = Shader.PropertyToID("_ShadowReceive");
             public static readonly int Band1 = Shader.PropertyToID("_Band1"), NoseDebug = Shader.PropertyToID("_NoseDebug"), Stop2 = Shader.PropertyToID("_Stop2"), InnerLineFade = Shader.PropertyToID("_InnerLineFade");
@@ -463,6 +466,7 @@ namespace FBX2NPR
             s.V(Id.NoseMoonShape, (noseFigure == NoseFigure.Crescent ? StretchedMoonShape() : moonShape) * k);
             s.V(Id.NoseMoonParam, new Vector4(moonParam.x, moonParam.y * k, moonThickness, (float)(int)noseFigure));
             s.V(Id.NoseMoonExtra, new Vector4(moonBulge, noseRadial * k, 0f, 0f));
+            s.F(Id.NoseLitMoon, (noseShadow && noseHalfMoon && noseLitMoon && noseTip != null && noseFigure == NoseFigure.Crescent) ? 1f : 0f);
             if (noseFigure == NoseFigure.Teardrop)
             {
                 Vector4 da, dr;
