@@ -237,6 +237,8 @@ namespace FBX2NPR.EditorTools
                         EditorGUI.BeginChangeCheck();
                         bool useSdf = EditorGUILayout.Toggle(new GUIContent("얼굴을 SDF 맵으로 칠하기", "켜면 얼굴 명암을 규칙 대신 맵에서 읽습니다. 끄면 규칙으로 돌아갑니다. 다시 변환해도 유지됩니다."), s.toonFaceSdf);
                         if (EditorGUI.EndChangeCheck()) { s.toonFaceSdf = useSdf; RigEditorUtil.SaveSettings(modelPath, s); FaceSdfBake.SetUse(prefab, useSdf); SceneView.RepaintAll(); }
+                        if (GUILayout.Button(new GUIContent("lilToon 형식으로 내보내기", "맵을 lilToon 의 SDF 그림자 마스크(影設定 > マスクタイプ = SDF)로 바꿔 프리팹 폴더에 저장하고, 그 마스크를 넣은 lilToon 재질을 만듭니다. lilToon 은 렌더러의 물체 축을 얼굴 방향으로 씁니다.")))
+                        { EditorUtility.DisplayDialog("FBX2NPR", string.Join("\n", FaceSdfLilToonExport.Export(prefab).lines.ToArray()), "확인"); GUIUtility.ExitGUI(); }
                     }
                 }
 

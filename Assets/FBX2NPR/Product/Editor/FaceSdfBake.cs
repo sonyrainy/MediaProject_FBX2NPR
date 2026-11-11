@@ -42,12 +42,36 @@ namespace FBX2NPR.EditorTools
 
         [Serializable] class Info { public int width, height; public float x, y, w, h; public int step; }
 
+        /// <summary>SDF 맵을 받는 얼굴 재질 칸: 렌더러와 그 재질.</summary>
+        internal struct FaceMaterialSlot { public Renderer renderer; public Material material; }
+
         /// <summary>마스크를 두는 폴더. Unity 가 가져오지 않는 폴더다.</summary>
         public static string MaskRoot(string prefabPath) { return Path.GetDirectoryName(prefabPath).Replace('\\', '/') + "/FaceSDF~"; }
 
         static string MapPath(string prefabPath, string texName) { return Path.GetDirectoryName(prefabPath).Replace('\\', '/') + "/" + texName + "_faceSDF.png"; }
 
         static string Safe(string s) { foreach (var c in Path.GetInvalidFileNameChars()) s = s.Replace(c, '_'); return s; }
+
+        /// <summary>
+        /// 텍스처 키(Safe 를 거친 텍스처 이름)의 맵을 PNG 원본 값 그대로 읽고, 맵이 담는 얼굴 UV 사각형을 준다.
+        /// 맵이 없으면 false (규칙으로 둔 텍스처). 맵 크기가 마스크 정보와 다르면 InvalidDataException.
+        /// </summary>
+        internal static bool ReadMap(string prefabPath, string texKey, out Color32[] px, out int w, out int h, out Rect uvRect)
+        {
+            px = null; w = h = 0; uvRect = default(Rect);
+            string infoPath = MaskRoot(prefabPath) + "/" + texKey + "/info.json", mapPath = MapPath(prefabPath, texKey);
+            if (!File.Exists(infoPath) || !File.Exists(mapPath)) return false;
+            var info = JsonUtility.FromJson<Info>(File.ReadAllText(infoPath));
+            var t = new Texture2D(2, 2, TextureFormat.RGBA32, false, true);
+            try
+            {
+                if (!t.LoadImage(File.ReadAllBytes(mapPath)) || t.width != info.width || t.height != info.height)
+                    throw new InvalidDataException("맵 크기가 마스크 정보와 다릅니다. '다시 합치기'를 누르세요: " + mapPath);
+                px = t.GetPixels32(); w = info.width; h = info.height; uvRect = new Rect(info.x, info.y, info.w, info.h);
+                return true;
+            }
+            finally { UnityEngine.Object.DestroyImmediate(t); }
+        }
 
         static int Round4(float v) { return Mathf.Max(8, Mathf.RoundToInt(v / 4f) * 4); }
 
@@ -161,15 +185,7 @@ namespace FBX2NPR.EditorTools
                 string path = MapPath(prefabPath, Path.GetFileName(dir));
                 File.WriteAllBytes(path, tex.EncodeToPNG());
                 UnityEngine.Object.DestroyImmediate(tex);
-                AssetDatabase.ImportAsset(path, ImportAssetOptions.ForceUpdate);
-                var imp = (TextureImporter)AssetImporter.GetAtPath(path);
-                imp.textureType = TextureImporterType.Default; imp.sRGBTexture = false; imp.mipmapEnabled = false; imp.alphaIsTransparency = false;
-                imp.alphaSource = TextureImporterAlphaSource.FromInput;
-                imp.wrapMode = TextureWrapMode.Clamp; imp.filterMode = FilterMode.Bilinear; imp.npotScale = TextureImporterNPOTScale.None;
-                // 고품질 압축 (PC 에서 BC7): 무압축의 1/4. 2026-11-09 시험에서 명암선 값 오차는 99.9% 가 1.4° 안, 근접 화면 차이 없음.
-                // 밉맵은 끈 채로 둔다: 값이 빛 각도라 부드럽게 변해서, 얼굴이 작게 보여도 밉맵 유무로 깜빡임이 달라지지 않았다.
-                imp.textureCompression = TextureImporterCompression.CompressedHQ; imp.maxTextureSize = 8192;
-                imp.SaveAndReimport();
+                ImportDataTexture(path);
                 rep.maps.Add(path);
                 rep.lines.Add(string.Format(CultureInfo.InvariantCulture, "맵 저장: {0} ({1}x{2}, 합치기 {3:F1}초)", path, W, H, sw.Elapsed.TotalSeconds));
                 if (W % 4 != 0 || H % 4 != 0) rep.lines.Add("  맵 크기가 4의 배수가 아니라 압축되지 않습니다 (예전에 구운 마스크). 다시 구우면 맞춰집니다.");
@@ -178,15 +194,29 @@ namespace FBX2NPR.EditorTools
             Apply(prefabPath, rep);
         }
 
+        /// <summary>값을 담은 맵(색이 아님)으로 가져온다: 선형, 밉맵 없음, 고품질 압축.</summary>
+        internal static void ImportDataTexture(string path)
+        {
+            AssetDatabase.ImportAsset(path, ImportAssetOptions.ForceUpdate);
+            var imp = (TextureImporter)AssetImporter.GetAtPath(path);
+            imp.textureType = TextureImporterType.Default; imp.sRGBTexture = false; imp.mipmapEnabled = false; imp.alphaIsTransparency = false;
+            imp.alphaSource = TextureImporterAlphaSource.FromInput;
+            imp.wrapMode = TextureWrapMode.Clamp; imp.filterMode = FilterMode.Bilinear; imp.npotScale = TextureImporterNPOTScale.None;
+            // 고품질 압축 (PC 에서 BC7): 무압축의 1/4. 얼굴 SDF 맵으로 잰 근거(2026-11-09): 명암선 값 오차는 99.9% 가 1.4° 안, 근접 화면 차이 없음.
+            // 밉맵은 끈 채로 둔다: SDF 맵은 값이 빛 각도라 부드럽게 변해서, 얼굴이 작게 보여도 밉맵 유무로 깜빡임이 달라지지 않았다.
+            imp.textureCompression = TextureImporterCompression.CompressedHQ; imp.maxTextureSize = 8192;
+            imp.SaveAndReimport();
+        }
+
         /// <summary>폴더의 맵을 프리팹의 얼굴 재질에 넣는다. 켜고 끄는 상태는 건드리지 않는다.</summary>
         public static void Apply(string prefabPath, Report rep)
         {
             string maskRoot = MaskRoot(prefabPath);
-            ForEachFaceMaterial(prefabPath, (m, texName) =>
+            ForEachFaceMaterial(prefabPath, (m, texKey) =>
             {
-                string dir = maskRoot + "/" + Safe(texName);
+                string dir = maskRoot + "/" + texKey;
                 if (!File.Exists(dir + "/info.json")) return;
-                var map = AssetDatabase.LoadAssetAtPath<Texture2D>(MapPath(prefabPath, Safe(texName)));
+                var map = AssetDatabase.LoadAssetAtPath<Texture2D>(MapPath(prefabPath, texKey));
                 if (map == null) return;
                 var info = JsonUtility.FromJson<Info>(File.ReadAllText(dir + "/info.json"));
                 m.SetTexture("_FaceSDF", map);
@@ -204,7 +234,7 @@ namespace FBX2NPR.EditorTools
         {
             if (on) Apply(prefabPath, new Report());
             int n = 0;
-            ForEachFaceMaterial(prefabPath, (m, texName) =>
+            ForEachFaceMaterial(prefabPath, (m, texKey) =>
             {
                 if (m.GetTexture("_FaceSDF") == null || m.GetTexture("_FaceSDF").name == "white") return;
                 m.SetFloat("_UseFaceSdf", on ? 1f : 0f);
@@ -223,21 +253,29 @@ namespace FBX2NPR.EditorTools
                 var rig = root.GetComponentInChildren<ToonFaceRig>(true);
                 if (rig == null) return;
                 var seen = new HashSet<Material>();
-                foreach (var r in rig.faceRenderers)
-                {
-                    if (r == null) continue;
-                    var mats = r.sharedMaterials;
-                    foreach (var m in mats)
-                    {
-                        if (m == null || !seen.Add(m) || !m.HasProperty("_FaceWeightOn") || !m.HasProperty("_FaceSDF")) continue;
-                        if (mats.Length > 1 && m.GetFloat("_FaceWeightOn") < 0.5f) continue;
-                        var t = m.GetTexture("_Albedo");
-                        act(m, t != null ? t.name : "noTexture");
-                    }
-                }
+                foreach (var s in FaceSlots(rig)) if (seen.Add(s.material)) act(s.material, TexKey(s.material));
             }
             finally { PrefabUtility.UnloadPrefabContents(root); }
         }
+
+        /// <summary>얼굴 렌더러에서 SDF 맵을 받는 재질 칸. 같은 재질이 여러 렌더러에서 나올 수 있다.</summary>
+        internal static IEnumerable<FaceMaterialSlot> FaceSlots(ToonFaceRig rig)
+        {
+            foreach (var r in rig.faceRenderers)
+            {
+                if (r == null) continue;
+                var mats = r.sharedMaterials;
+                foreach (var m in mats)
+                {
+                    if (m == null || !m.HasProperty("_FaceWeightOn") || !m.HasProperty("_FaceSDF")) continue;
+                    if (mats.Length > 1 && m.GetFloat("_FaceWeightOn") < 0.5f) continue;
+                    yield return new FaceMaterialSlot { renderer = r, material = m };
+                }
+            }
+        }
+
+        /// <summary>재질의 맵을 찾는 키: 얼굴 텍스처 이름을 파일 이름으로 쓸 수 있게 고친 것. 마스크 폴더와 맵 파일 이름이 된다.</summary>
+        internal static string TexKey(Material m) { var t = m.GetTexture("_Albedo"); return Safe(t != null ? t.name : "noTexture"); }
 
         // 얼굴 재질 칸을 텍스처별로 묶는다. 스킨 메시는 지금 자세로 구운 사본을 쓴다 (코·턱 자리가 이 자세의 월드 좌표다).
         static List<Group> CollectGroups(ToonFaceRig rig, List<UnityEngine.Object> temps)
@@ -262,7 +300,7 @@ namespace FBX2NPR.EditorTools
                     bool wOn = m.GetFloat("_FaceWeightOn") > 0.5f;
                     if (mats.Length > 1 && !wOn) continue;
                     var tex = m.GetTexture("_Albedo");
-                    string name = Safe(tex != null ? tex.name : "noTexture");
+                    string name = TexKey(m);
                     var g = groups.Find(x => x.albedo == tex);
                     if (g == null) { g = new Group { albedo = tex, name = name }; groups.Add(g); }
                     g.slots.Add(new Slot { mesh = mesh, l2w = l2w, sub = s, mat = m });
