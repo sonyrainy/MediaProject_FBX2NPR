@@ -3,6 +3,7 @@
 이 폴더의 이미지는 아래 모델을 Unity에서 렌더한 것입니다. 모델 파일은 저장소에 없습니다.
 
 - 원본과 다른 점: 노멀 정리 전후와 셰이더별 결과를 비교하려고 다시 렌더했습니다.
+- Night Dress는 앞머리 메시에 꿰매지 않은 가는 틈(양쪽 눈 옆, 폭 0.65 mm 이하)이 있어 외곽선이 점으로 찍혔습니다. 틈마다 삼각형 하나를 덧대 메운 모델로 렌더했습니다 (problems/ 그림은 메우기 전 모델).
 - 각 이미지 아래쪽에도 모델 이름과 라이선스를 적었습니다.
 
 **유니티짱** (unitychan_light_orbit.gif, results_side.jpg, anime3_light_orbit.gif, liltoon_export.jpg, problems/expression.jpg)
