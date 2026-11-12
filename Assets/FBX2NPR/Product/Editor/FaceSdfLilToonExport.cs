@@ -8,8 +8,8 @@ namespace FBX2NPR.EditorTools
 {
     /// <summary>
     /// 프리팹의 얼굴 SDF 맵을 텍스처마다 lilToon 마스크(프리팹 폴더의 &lt;텍스처&gt;_lilToonSDF.png)와 재질(&lt;텍스처&gt;_lilToon.mat)로 내보낸다. 계산은 FaceSdfLilToon.
-    /// 재질이 이미 있으면 SDF 값만 바꾸고 색 등 나머지는 둔다. 새 재질은 얼굴 텍스처를 넣고, 우리 얼굴처럼 그림자를 한 단만 쓴다. 프리팹은 바꾸지 않는다.
-    /// 재질 값은 재질 전체에 걸린다: 같은 재질을 쓰는 몸(마스크 B = 255)도 경계 0.5·얼굴 명암선에 맞춘 경계 폭·2번째 그림자 끔을 따르고,
+    /// 재질이 이미 있으면 SDF 값만 바꾸고 색 등 나머지는 둔다. 새 재질은 얼굴 텍스처를 넣고, 우리 얼굴처럼 그림자를 한 단만, 연하게 쓴다. 프리팹은 바꾸지 않는다.
+    /// 재질 값은 재질 전체에 걸린다: 같은 재질을 쓰는 몸(마스크 B = 255)도 경계 0.5·얼굴 명암선에 맞춘 경계 폭·2번째 그림자 끔·연한 그늘을 따르고,
     /// lilToon 의 SDF 모드는 재질 전체의 경계 안티에일리어싱을 끈다. 몸 경계에 계단이 보이면 _ShadowBlur 를 올리면 된다 (경계 위치는 그대로다).
     /// lilToon 은 렌더러의 물체 축(+Z 앞, −X 옆)을 얼굴 방향으로 쓴다. 리그 입력이 없어서 맵으로는 고칠 수 없고, 어긋나면 내보낼 때 알린다.
     /// </summary>
@@ -21,6 +21,8 @@ namespace FBX2NPR.EditorTools
         const float AxisWarnDeg = 5f;
         /// <summary>lilToon _ShadowMaskType 의 SDF (0 세기, 1 평면, 2 SDF).</summary>
         const float MaskTypeSdf = 2f;
+        /// <summary>새로 만드는 재질의 그늘 세기(_ShadowStrength, lilToon 기본 1). 0.6 이 FBX2NPR 화면과 비슷하게 연했다.</summary>
+        const float NewShadowStrength = 0.6f;
 
         public static FaceSdfBake.Report Export(string prefabPath)
         {
@@ -48,6 +50,7 @@ namespace FBX2NPR.EditorTools
                 FaceSdfLilToon.Window(FaceSdfLilToon.Border, out lo, out hi);
                 rep.lines.Add(string.Format(CultureInfo.InvariantCulture, "lilToon 기본 경계 {0:F1} 로 빛 {1:F0}°~{2:F0}° 를 담습니다. 그 밖의 빛에서는 명암이 FBX2NPR 과 달라집니다.", FaceSdfLilToon.Border, lo, hi));
                 rep.lines.Add("그늘 경계 폭은 얼굴 명암선에 맞췄습니다. 같은 재질을 쓰는 몸도 경계가 또렷해지고 2번째 그림자가 꺼집니다 (계단이 보이면 _ShadowBlur 를 올리세요).");
+                rep.lines.Add(string.Format(CultureInfo.InvariantCulture, "새로 만든 재질은 그늘을 연하게 둡니다 (세기 {0}, 경계의 붉은 띠 끔). 이미 있던 재질의 색과 세기는 바꾸지 않습니다.", NewShadowStrength));
                 if (nose) rep.lines.Add(string.Format(CultureInfo.InvariantCulture, "코 그림자는 큰 명암선에 합쳐 진하기 100% 로 그립니다 (FBX2NPR 은 {0:0%}). 밝은 코 초승달과 코 그림자가 옅어지는 효과는 lilToon 마스크에 담을 수 없어 뺐습니다.", rig.noseStrength));
             }
             finally { PrefabUtility.UnloadPrefabContents(root); }
@@ -85,6 +88,10 @@ namespace FBX2NPR.EditorTools
                 var alb = slots[0].material.GetTexture("_Albedo");
                 if (alb != null) mat.SetTexture("_MainTex", alb);
                 var c2 = mat.GetColor("_Shadow2ndColor"); c2.a = 0f; mat.SetColor("_Shadow2ndColor", c2);   // 2번째 그림자도 SDF 값을 따라 한 단 더 생긴다. 우리 얼굴은 한 단
+                // 그늘을 연하게: lilToon 기본값은 명암 경계에 붉은 띠(_ShadowBorderRange 0.08)를 넓게 깔아 그늘이 분홍빛으로 진해 보였다 (2026-11-12, 사용자 "더 연하게").
+                // 띠를 끄고 세기를 낮추면 FBX2NPR 화면과 비슷하게 연했다. 그늘 위치는 경계 값만 정하므로 그대로다.
+                mat.SetFloat("_ShadowBorderRange", 0f);
+                mat.SetFloat("_ShadowStrength", NewShadowStrength);
                 AssetDatabase.CreateAsset(mat, matPath);
             }
             mat.SetFloat("_UseShadow", 1f);
