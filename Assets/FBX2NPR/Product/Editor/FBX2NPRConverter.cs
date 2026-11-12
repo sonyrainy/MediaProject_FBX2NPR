@@ -23,6 +23,7 @@ namespace FBX2NPR.EditorTools
     /// 스킨 메시의 원본 노멀은 UV4 에 탄젠트 공간으로 싣는다 (OriginalNormals, ToonBand 의 _OrigTangentSpace). UV3(물체 공간)만으로는 뼈를 따라 돌지 않아
     /// 고개를 돌릴 때 코 음영과 외곽선이 어긋나고, 예전처럼 탄젠트 자리에 실으면 노멀맵과 다른 셰이더가 쓸 탄젠트를 잃는다.
     /// 얼굴 렌더러에는 렌더링 레이어 OriginalNormals.LineLayer 를 켠다. 외곽선 피처가 재질 셰이더와 상관없이 원본 노멀로 안쪽 선을 그린다.
+    /// 실루엣 선만 쓰는 얼굴은 OriginalNormals.FlatLineLayer 도 켜서, 얼굴 재질을 다른 셰이더로 바꿔도 실루엣만 그린다.
     /// 얼굴 기준점(코끝·눈·얼굴 중심)은 머리 본 아래에 표식으로 두어 머리와 같이 움직이게 한다.
     /// 빛은 씬의 디렉셔널 라이트를 따른다 (ToonFaceRig.LightDirection).
     ///
@@ -466,10 +467,14 @@ namespace FBX2NPR.EditorTools
                     }
                     if (p.smr != null) p.smr.sharedMesh = p.mesh; else p.mf.sharedMesh = p.mesh;
                     p.rend.sharedMaterials = mats;
-                    // 외곽선 피처가 다시 그릴 렌더러. 안쪽 선을 쓰는 얼굴은 원본 노멀로, 이미 평평하게 칠한 얼굴(위 handPainted)은 재질 값대로
+                    // 외곽선 피처가 다시 그릴 렌더러. 안쪽 선을 쓰는 얼굴은 원본 노멀로, 이미 평평하게 칠한 얼굴(위 handPainted)은
                     // 카메라 방향 노멀로 그려진다. 그래야 외곽선이 그 얼굴 자리를 알고 얼굴 안에서는 깊이가 끊긴 곳만 선으로 본다
                     // (전에는 켜지 않아 코볼·입 옆처럼 비스듬히 돌아가는 면이 흐린 겹선으로 남았다, Night Dress 2026-11-03).
                     if (faceRend) p.rend.renderingLayerMask |= OriginalNormals.LineLayer;
+                    // 실루엣만 쓰는 얼굴은 재질 값(_OutlineFlatNormal)과 함께 렌더러에도 표시한다. 재질 값만 두면 얼굴 재질을 lilToon 등으로 바꿀 때 사라져,
+                    // 외곽선이 얼굴 안의 잔굴곡을 회색 선 덩어리로 그렸다 (2026-11-12). 원본 렌더러에 이 비트가 이미 켜져 있을 수 있어(Everything) 아니면 끈다.
+                    if (faceRend && rep.handPainted) p.rend.renderingLayerMask |= OriginalNormals.FlatLineLayer;
+                    else p.rend.renderingLayerMask &= ~OriginalNormals.FlatLineLayer;
                     (faceRend ? faceRends : otherRends).Add(p.rend);
                 }
                 rep.lines.Add(string.Format("메시 {0}개, 재질 {1}개 (얼굴 렌더러 {2}, 그 밖 {3}), 텍스처 평탄화 {4}개", parts.Count, matN, faceRends.Count, otherRends.Count, baked));

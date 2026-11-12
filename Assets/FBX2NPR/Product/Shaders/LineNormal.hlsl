@@ -4,6 +4,14 @@
 // 외곽선용 노멀 (월드). 노멀 버퍼에 쓰는 값이라 ToonBand 의 DepthNormals 패스와 외곽선 피처의 원본 노멀 패스(LineNormals.shader)가 같은 식을 씁니다.
 // 쓰기 전에 재질 값 _OutlineFlatNormal, _InnerLineFade, _FaceWeightOn, _FaceUp, _FaceForward, _NoseTip, _NoseRadius, _NoseLineFade 를 선언해 두어야 합니다.
 
+// 실루엣 선만 쓰는 얼굴: 재질 값이나 렌더러의 렌더링 레이어(변환 도구가 켬, OriginalNormals.FlatLineLayer 와 같은 9번째 비트) 중 하나라도 켜져 있으면.
+// 재질 값은 ToonBand 재질에만 있어서, 얼굴 재질을 lilToon·URP Lit 으로 바꾸면 얼굴 안의 잔굴곡이 회색 선 덩어리로 잡혔다 (2026-11-12).
+#define FBX2NPR_FLAT_LINE_LAYER (1u << 8)
+bool FlatLine()
+{
+    return _OutlineFlatNormal > 0.5 || (GetMeshRenderingLayer() & FBX2NPR_FLAT_LINE_LAYER) != 0u;
+}
+
 // 코 둘레에서 안쪽 선을 지울 비중 (0~1). 콧방울 옆·코끝의 둥근 굴곡은 소벨에 선이 아니라 넓고 흐린 회색으로 잡혀 얼룩처럼 보였다(2026-10-29).
 // 영역은 리그가 코 그림자에 쓰는 코 영역(ToonBand 코 음영과 같은 타원)이다. 코 모양은 콧구멍(텍스처)과 코 그림자가 맡고, 입·눈은 영역 밖이라 선이 남는다.
 // 노멀이 갑자기 바뀌면 그 경계가 선으로 잡히므로, 코 음영과 달리 뒤쪽 깊이 경계도 계단 대신 부드럽게 줄인다.
@@ -24,7 +32,7 @@ float NoseLineMask(float3 pw)
 float3 LineNormalWS(float3 positionOS, float3 srcOS, float2 faceW)
 {
     float3 pw = TransformObjectToWorld(positionOS);
-    if (_OutlineFlatNormal > 0.5)
+    if (FlatLine())
     {
         // 정점마다 카메라를 향하는 벡터. 메시 안에서 매끄럽게 변하므로 소벨이 잡을 노멀 엣지가 없습니다.
         return normalize(_WorldSpaceCameraPos - pw);

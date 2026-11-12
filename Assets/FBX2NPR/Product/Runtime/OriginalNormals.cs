@@ -18,6 +18,12 @@ namespace FBX2NPR
         /// <summary>외곽선 피처가 원본 노멀로 다시 그릴 렌더러에 켜는 렌더링 레이어 (8번째 비트). 변환 도구가 얼굴 렌더러에 켭니다.</summary>
         public const uint LineLayer = 1u << 7;
 
+        /// <summary>
+        /// 실루엣 선만 쓰는 얼굴 렌더러에 켜는 렌더링 레이어 (9번째 비트). 외곽선용 노멀을 재질과 상관없이 카메라 방향으로 그립니다.
+        /// 재질 값 _OutlineFlatNormal 은 ToonBand 재질에만 있어서, 얼굴 재질을 다른 셰이더로 바꾸면 사라졌습니다. LineNormal.hlsl 의 FBX2NPR_FLAT_LINE_LAYER 와 같은 값입니다.
+        /// </summary>
+        public const uint FlatLineLayer = 1u << 8;
+
         // 노멀에 직교화한 탄젠트와 바이탄젠트. 탄젠트가 없거나 노멀과 평행하면 셰이더와 같은 규칙으로 다른 축을 고릅니다.
         static void Frame(Vector3 n, Vector4 t, out Vector3 tt, out Vector3 b)
         {

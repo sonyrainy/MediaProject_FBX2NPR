@@ -3,9 +3,10 @@
 // 캐릭터 재질이 ToonBand 가 아니어도(UTS, lilToon, URP Lit …) 코·입 선이 살아 있게 하려고 만들었습니다.
 // 다른 셰이더의 노멀 버퍼에는 정리된 노멀이 들어가 코·입의 굴곡이 지워져 있기 때문입니다.
 // 피처가 렌더러의 재질 대신 이 셰이더로 그리되(override shader) 재질 값은 그대로 받으므로,
-// ToonBand 재질이면 안쪽 선 지우기·실루엣만·컷아웃 값까지 DepthNormals 패스와 같은 결과가 나옵니다. 다른 재질이면 그 값들은 꺼진 기본값입니다.
+// ToonBand 재질이면 안쪽 선 지우기·실루엣만·컷아웃 값까지 DepthNormals 패스와 같은 결과가 나옵니다. 다른 재질이면 그 값들은 꺼진 기본값이고,
+// 실루엣만은 변환 도구가 렌더러의 렌더링 레이어에도 켜 두어 재질과 상관없이 지킵니다 (LineNormal.hlsl 의 FlatLine). 코 둘레 값은 리그가 렌더러마다 넣습니다.
 // 출력: xyz 외곽선용 노멀(월드), w 카메라까지 거리. 소벨 셰이더가 장면 깊이와 같은 자리에서만 이 노멀을 씁니다.
-// 실루엣 선만 쓰는 얼굴(_OutlineFlatNormal)의 안쪽(얼굴 가중치 0.9 초과)은 w 를 음수로 남겨, 소벨 셰이더가 거기서 깊이가 끊긴 곳만 선으로 보게 합니다.
+// 실루엣 선만 쓰는 얼굴(재질 _OutlineFlatNormal 이나 렌더러 표시)의 안쪽(얼굴 가중치 0.9 초과)은 w 를 음수로 남겨, 소벨 셰이더가 거기서 깊이가 끊긴 곳만 선으로 보게 합니다.
 // 얼굴 가중치로 자르는 것은 같은 재질을 쓰는 몸의 선까지 바꾸지 않으려는 것입니다.
 Shader "FBX2NPR/LineNormals"
 {
@@ -95,7 +96,7 @@ Shader "FBX2NPR/LineNormals"
             float4 frag (Varyings i) : SV_Target
             {
                 if (_Cutout > 0.5) clip(SAMPLE_TEXTURE2D(_Albedo, sampler_Albedo, i.uv).a - _Cutoff);
-                bool flatInner = _OutlineFlatNormal > 0.5 && i.faceW > 0.9;
+                bool flatInner = FlatLine() && i.faceW > 0.9;
                 return float4(normalize(i.normalWS), flatInner ? -i.eyeDepth : i.eyeDepth);
             }
             ENDHLSL

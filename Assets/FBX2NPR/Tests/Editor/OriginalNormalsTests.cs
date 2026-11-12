@@ -11,6 +11,17 @@ namespace FBX2NPR.Tests
     {
         static Vector3 Dir(float yaw, float pitch) { return Quaternion.Euler(pitch, yaw, 0f) * Vector3.forward; }
 
+        // 실루엣만 표시 비트는 C#(변환 도구가 켬)과 셰이더(외곽선이 읽음)에 따로 적혀 있다. 어긋나면 표시가 있어도 셰이더가 못 읽는다.
+        [Test]
+        public void FlatLineLayerMatchesShaderDefine()
+        {
+            string hlsl = System.IO.File.ReadAllText("Assets/FBX2NPR/Product/Shaders/LineNormal.hlsl");
+            var m = System.Text.RegularExpressions.Regex.Match(hlsl, @"#define\s+FBX2NPR_FLAT_LINE_LAYER\s+\(1u\s*<<\s*(\d+)\)");
+            Assert.That(m.Success, Is.True, "LineNormal.hlsl 에 FBX2NPR_FLAT_LINE_LAYER 정의가 없습니다");
+            Assert.That(1u << int.Parse(m.Groups[1].Value), Is.EqualTo(OriginalNormals.FlatLineLayer));
+            Assert.That(OriginalNormals.FlatLineLayer & OriginalNormals.LineLayer, Is.EqualTo(0u), "얼굴 렌더러 표시와 다른 비트여야 한다");
+        }
+
         [TestCase(10f, 20f, 1f)]
         [TestCase(170f, -60f, 1f)]
         [TestCase(95f, 80f, -1f)]   // 바이탄젠트가 뒤집힌 정점 (탄젠트 w = -1, UV 를 좌우 뒤집어 붙인 곳)

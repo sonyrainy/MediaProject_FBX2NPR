@@ -9,7 +9,7 @@ namespace FBX2NPR.Tests
     /// <summary>
     /// 변환 결과(툰 프리팹)가 원본 노멀을 제대로 실었는지 봅니다.
     /// - 메시: UV4(탄젠트 공간)를 되돌리면 UV3(물체 공간 원본 노멀)과 같아야 하고, 탄젠트는 노멀에 직교하는 진짜 탄젠트여야 합니다.
-    /// - 얼굴 렌더러: 외곽선 피처가 원본 노멀로 다시 그리도록 렌더링 레이어가 켜져 있어야 합니다.
+    /// - 얼굴 렌더러: 외곽선 피처가 원본 노멀로 다시 그리도록 렌더링 레이어가 켜져 있어야 합니다. 실루엣 선만 쓰는 얼굴은 그 표시도 렌더러에 있어야 합니다.
     /// 변환 결과는 저장소에 올리지 않으므로, 없으면 건너뜁니다 (먼저 변환해야 검사됩니다).
     /// </summary>
     public class ConvertedOutputTests
@@ -67,13 +67,38 @@ namespace FBX2NPR.Tests
                 foreach (var r in rig.faceRenderers)
                 {
                     if (r == null) continue;
-                    // 얼굴은 모두 외곽선 피처가 다시 그린다. 안쪽 선을 쓰는 얼굴은 원본 노멀로, 이미 평평하게 칠한 얼굴(_OutlineFlatNormal)은
+                    // 얼굴은 모두 외곽선 피처가 다시 그린다. 안쪽 선을 쓰는 얼굴은 원본 노멀로, 이미 평평하게 칠한 얼굴(재질 _OutlineFlatNormal·렌더러 FlatLineLayer)은
                     // 카메라 방향 노멀로 그려져 외곽선이 그 얼굴 안에서는 깊이가 끊긴 곳만 선으로 본다 (2026-11-03 전에는 실루엣만 얼굴을 빼 두었다).
                     bool marked = (r.renderingLayerMask & OriginalNormals.LineLayer) != 0;
                     Assert.That(marked, Is.True, pf.name + "/" + r.name + ": 얼굴인데 외곽선 렌더링 레이어가 꺼져 있습니다 (다시 변환 필요).");
                 }
             }
             if (rigs == 0) Assert.Ignore("얼굴 리그가 있는 변환 결과가 없습니다 (" + FBX2NPRConverter.OutRoot + ")");
+        }
+
+        // 실루엣 선만 쓰는 얼굴(얼굴 재질의 _OutlineFlatNormal)은 렌더러의 렌더링 레이어에도 표시한다. 재질 값만 있으면 얼굴 재질을 lilToon·URP Lit 으로 바꿀 때
+        // 사라져서, 외곽선이 얼굴 안의 잔굴곡을 회색 선 덩어리로 그렸다 (2026-11-12). 외곽선 셰이더는 둘 중 하나만 켜져 있어도 실루엣만 그린다.
+        [Test]
+        public void SilhouetteFacesAreMarkedOnTheRenderer()
+        {
+            int faces = 0;
+            foreach (var pf in ToonPrefabs())
+            {
+                var rig = pf.GetComponentInChildren<ToonFaceRig>(true);
+                if (rig == null) continue;
+                foreach (var r in rig.faceRenderers)
+                {
+                    if (r == null) continue;
+                    Material face = null;
+                    foreach (var m in r.sharedMaterials) if (m != null && m.HasProperty("_FaceWeightOn") && m.GetFloat("_FaceWeightOn") > 0.5f) { face = m; break; }
+                    if (face == null) continue;
+                    bool flat = face.GetFloat("_OutlineFlatNormal") > 0.5f;
+                    bool marked = (r.renderingLayerMask & OriginalNormals.FlatLineLayer) != 0;
+                    Assert.That(marked, Is.EqualTo(flat), pf.name + "/" + r.name + ": 얼굴 재질의 실루엣만 값과 렌더러 표시가 다릅니다 (다시 변환 필요).");
+                    faces++;
+                }
+            }
+            if (faces == 0) Assert.Ignore("얼굴 재질이 있는 변환 결과가 없습니다 (" + FBX2NPRConverter.OutRoot + ")");
         }
 
         [Test]
